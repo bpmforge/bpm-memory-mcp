@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.0 |
+| Version | 2.0 |
 | Date | 2026-01-16 |
 | Status | Draft |
 | Author | Claude + User |
@@ -13,12 +13,14 @@
 
 ### 1.1 Purpose
 
-This Software Requirements Specification (SRS) defines the functional and non-functional requirements for **claude-memory**, an MCP (Model Context Protocol) server providing persistent intelligent memory for Claude Code sessions.
+This Software Requirements Specification (SRS) defines the functional and non-functional requirements for **claude-memory**, a **hybrid Claude Code plugin** providing persistent intelligent memory through the optimal combination of Skills, MCP Server, and Hooks.
 
 ### 1.2 Scope
 
 claude-memory provides:
-- Persistent memory across Claude Code sessions
+- **Skill Layer**: Teaches Claude memory patterns (low token overhead)
+- **MCP Server**: Handles computation-heavy operations (embeddings, search)
+- **Hooks Layer**: Deterministic automation (session management, project switching)
 - Hybrid search (vector + BM25 with RRF fusion)
 - Knowledge graph with temporal awareness
 - Context engineering (auto-compact, token budgets)
@@ -29,6 +31,8 @@ claude-memory provides:
 | Term | Definition |
 |------|------------|
 | MCP | Model Context Protocol - standard for Claude tool integration |
+| Skill | Markdown file teaching Claude procedures, loaded on demand |
+| Hook | Shell command executed on Claude Code events |
 | RRF | Reciprocal Rank Fusion - algorithm to combine search rankings |
 | BM25 | Best Match 25 - probabilistic keyword search algorithm |
 | Core Memory | MemGPT-style self-editable memory blocks |
@@ -38,17 +42,98 @@ claude-memory provides:
 ### 1.4 References
 
 - [MCP Specification](https://modelcontextprotocol.io)
+- [Claude Code Skills Documentation](https://code.claude.com/docs/en/skills)
+- [Claude Code Hooks Guide](https://code.claude.com/docs/en/hooks-guide)
 - [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service)
 - [MemGPT Paper](https://arxiv.org/abs/2310.08560)
-- [OpenSearch RRF](https://opensearch.org/blog/introducing-reciprocal-rank-fusion-hybrid-search/)
+
+### 1.5 Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    claude-memory Plugin                         │
+├─────────────────────────────────────────────────────────────────┤
+│  Skill Layer (~100-2000 tokens)                                 │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ SKILL.md: When to store, query formulation, context mgmt   ││
+│  │ compact.sh: Context summarization script                    ││
+│  │ validate.sh: Memory validation script                       ││
+│  └─────────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────────┤
+│  MCP Server Layer (6 focused tools)                             │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ memory_store, memory_recall, memory_forget                  ││
+│  │ session_save, session_restore, graph_query                  ││
+│  └─────────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────────┤
+│  Hooks Layer (deterministic automation)                         │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ PreToolUse: Auto-restore sessions, sync CLAUDE.md           ││
+│  │ PostToolUse: Log file changes, store errors                 ││
+│  └─────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## 2. Functional Requirements
 
-### 2.1 MCP Server Core
+### 2.1 Skill Layer
 
-#### FR-001: MCP Protocol Compliance
+#### SK-001: Memory Skill File
+The system SHALL provide a SKILL.md file that teaches Claude memory patterns.
+
+**Content:**
+1. When to store (decisions, errors, patterns, preferences)
+2. How to query (effective search formulation)
+3. Context engineering (when to compact, budget awareness)
+4. Memory type selection (fact, pattern, decision, error)
+5. Project isolation awareness
+
+**Token Efficiency:**
+- Metadata: ~100 tokens (always loaded)
+- Full skill: ~2,000 tokens (loaded on memory task)
+- Progressive disclosure
+
+**File:** `skills/memory/SKILL.md`
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-001, US-002
+
+---
+
+#### SK-002: Skill Scripts
+The system SHALL provide helper scripts for skill operations.
+
+**Scripts:**
+| Script | Purpose | Trigger |
+|--------|---------|---------|
+| `compact.sh` | Summarize context, extract facts | Skill invokes at 95% capacity |
+| `validate.sh` | Validate memory consistency | Manual or scheduled |
+
+**File:** `skills/memory/scripts/`
+
+**Priority:** P1 (Should Have)
+**Traces To:** US-027, US-028
+
+---
+
+#### SK-003: Skill Progressive Disclosure
+The system SHALL support progressive skill loading.
+
+**Levels:**
+1. **Metadata** (~100 tokens): Always loaded with skill directory
+2. **Full skill** (~2,000 tokens): Loaded when user invokes `/memory` or similar
+3. **Archival retrieval**: On explicit query via MCP tool
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-029
+
+---
+
+### 2.2 MCP Server Core
+
+#### MCP-001: MCP Protocol Compliance
 The system SHALL implement the MCP specification using the official TypeScript SDK.
 
 **Acceptance Criteria:**
@@ -59,37 +144,41 @@ The system SHALL implement the MCP specification using the official TypeScript S
 - Error responses per spec
 
 **Priority:** P0 (Must Have)
-**Traces To:** US-001, US-002
+**Traces To:** US-003, US-004
 
 ---
 
-#### FR-002: Tool Registration
-The system SHALL register 14 MCP tools with Claude Code.
+#### MCP-002: Tool Registration (Reduced Set)
+The system SHALL register 6 MCP tools with Claude Code.
 
 **Tools:**
-| ID | Tool Name | Category |
-|----|-----------|----------|
-| T-001 | `memory_store` | Memory |
-| T-002 | `memory_recall` | Memory |
-| T-003 | `memory_forget` | Memory |
-| T-004 | `memory_update` | Memory |
-| T-005 | `context_compact` | Context |
-| T-006 | `context_status` | Context |
-| T-007 | `session_save` | Session |
-| T-008 | `session_restore` | Session |
-| T-009 | `session_list` | Session |
-| T-010 | `graph_query` | Graph |
-| T-011 | `graph_add` | Graph |
-| T-012 | `graph_visualize` | Graph |
-| T-013 | `project_switch` | Project |
-| T-014 | `project_list` | Project |
+| ID | Tool Name | Purpose |
+|----|-----------|---------|
+| T-001 | `memory_store` | Store with embedding + entity extraction |
+| T-002 | `memory_recall` | Hybrid search with citations |
+| T-003 | `memory_forget` | Soft-delete with provenance |
+| T-004 | `session_save` | Persist session state |
+| T-005 | `session_restore` | Load previous session |
+| T-006 | `graph_query` | Query entity relationships |
+
+**Operations Moved to Skill/Scripts:**
+| Former Tool | New Location | Rationale |
+|-------------|--------------|-----------|
+| `context_compact` | Skill + compact.sh | Orchestration logic |
+| `context_status` | Skill reads storage | Read-only operation |
+| `memory_update` | Skill orchestrates store + forget | Composition |
+| `session_list` | Skill reads storage | Read-only operation |
+| `graph_add` | Implicit in memory_store | Entity extraction auto |
+| `graph_visualize` | Skill formats output | Text formatting |
+| `project_switch` | Hook on directory change | Deterministic trigger |
+| `project_list` | Skill reads storage | Read-only operation |
 
 **Priority:** P0 (Must Have)
-**Traces To:** US-003, US-004, US-005
+**Traces To:** US-005, US-006, US-007
 
 ---
 
-#### FR-003: Resource Exposure
+#### MCP-003: Resource Exposure
 The system SHALL expose MCP resources for memory inspection.
 
 **Resources:**
@@ -102,7 +191,259 @@ The system SHALL expose MCP resources for memory inspection.
 
 ---
 
-### 2.2 Memory Storage
+### 2.3 Hooks Layer
+
+#### HK-001: Session Start Hook
+The system SHALL auto-restore sessions on Claude Code start.
+
+**Configuration:**
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "SessionStart",
+        "command": "claude-memory session-restore"
+      }
+    ]
+  }
+}
+```
+
+**Behavior:**
+1. Detect session start event
+2. Find most recent session for current project
+3. Restore working memory and core memory
+4. Inject session summary to context
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-031, US-032
+
+---
+
+#### HK-002: CLAUDE.md Sync Hook
+The system SHALL sync CLAUDE.md changes to core memory.
+
+**Configuration:**
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read(CLAUDE.md)",
+        "command": "claude-memory sync-claudemd"
+      }
+    ]
+  }
+}
+```
+
+**Behavior:**
+1. Detect CLAUDE.md read
+2. Parse project identity, guidelines, architecture
+3. Update core memory Persona block
+4. Store key facts to archival
+
+**Priority:** P1 (Should Have)
+**Traces To:** US-013, US-014
+
+---
+
+#### HK-003: File Change Hook
+The system SHALL log file changes to memory.
+
+**Configuration:**
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "claude-memory log-change \"$FILE_PATH\""
+      }
+    ]
+  }
+}
+```
+
+**Behavior:**
+1. Detect Edit or Write tool completion
+2. Extract changed file path
+3. Store change summary as fact
+4. Update knowledge graph entities
+
+**Priority:** P1 (Should Have)
+**Traces To:** US-015
+
+---
+
+#### HK-004: Error Capture Hook
+The system SHALL capture errors for learning.
+
+**Configuration:**
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash(error)",
+        "command": "claude-memory store-error \"$ERROR\""
+      }
+    ]
+  }
+}
+```
+
+**Behavior:**
+1. Detect Bash tool errors
+2. Extract error message and context
+3. Store as ERROR memory type
+4. Link to related code entities
+
+**Priority:** P1 (Should Have)
+**Traces To:** US-016
+
+---
+
+#### HK-005: Session End Hook
+The system SHALL auto-save sessions on exit.
+
+**Configuration:**
+```json
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "command": "claude-memory session-save"
+      }
+    ]
+  }
+}
+```
+
+**Behavior:**
+1. Detect session end event
+2. Serialize working memory
+3. Snapshot core memory
+4. Generate conversation summary
+5. Persist to storage
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-031
+
+---
+
+#### HK-006: Project Switch Hook
+The system SHALL switch databases on project change.
+
+**Configuration:**
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "DirectoryChange",
+        "command": "claude-memory project-switch"
+      }
+    ]
+  }
+}
+```
+
+**Behavior:**
+1. Detect working directory change
+2. Identify new project (git root, CLAUDE.md)
+3. Save current project state
+4. Load new project database
+5. Restore new project core memory
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-034, US-035
+
+---
+
+### 2.4 Plugin Distribution
+
+#### PL-001: Plugin Manifest
+The system SHALL provide a standard plugin manifest.
+
+**File:** `.claude-plugin/manifest.json`
+```json
+{
+  "name": "claude-memory",
+  "version": "1.0.0",
+  "description": "Persistent intelligent memory for Claude Code",
+  "author": "...",
+  "license": "MIT",
+  "components": {
+    "skills": ["memory"],
+    "mcp": ["memory-server"],
+    "hooks": true
+  },
+  "dependencies": {
+    "runtime": {
+      "@modelcontextprotocol/sdk": "^1.0.0",
+      "better-sqlite3": "^9.0.0"
+    },
+    "optional": {
+      "ollama": "For local embeddings"
+    }
+  }
+}
+```
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-041
+
+---
+
+#### PL-002: Single-Command Installation
+The system SHALL support single-command installation.
+
+**Commands:**
+```bash
+# From marketplace (future)
+/plugin install claude-memory
+
+# From repository
+/plugin install github:user/claude-memory
+
+# Manual
+git clone ... && cd claude-memory && ./install.sh
+```
+
+**Install Actions:**
+1. Create `~/.claude-memory/` directory
+2. Copy skill to `~/.claude/skills/memory/`
+3. Configure MCP server in `~/.claude/settings.json`
+4. Merge hooks into settings
+5. Pull Ollama model if needed
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-042
+
+---
+
+#### PL-003: Marketplace Metadata
+The system SHALL provide marketplace distribution info.
+
+**File:** `.claude-plugin/marketplace.json`
+```json
+{
+  "category": "productivity",
+  "tags": ["memory", "context", "persistence"],
+  "screenshots": [...],
+  "readme": "README.md",
+  "changelog": "CHANGELOG.md"
+}
+```
+
+**Priority:** P2 (Nice to Have)
+**Traces To:** US-043
+
+---
+
+### 2.5 Memory Storage
 
 #### FR-010: Memory Store Operation
 The system SHALL store memories with automatic metadata extraction.
@@ -192,32 +533,7 @@ The system SHALL soft-delete memories with provenance tracking.
 
 ---
 
-#### FR-013: Memory Update Operation
-The system SHALL update existing memories with conflict resolution.
-
-**Input:**
-```typescript
-{
-  id: string,           // Memory ID
-  content?: string,     // New content
-  confidence?: number,  // Updated confidence
-  supersedes?: boolean  // Mark old as superseded
-}
-```
-
-**Behavior:**
-1. Validate memory exists
-2. If content changed, regenerate embedding
-3. Update metadata (accessed, modified)
-4. If supersedes=true, link old→new
-5. Handle conflicts (newer wins)
-
-**Priority:** P1 (Should Have)
-**Traces To:** US-011
-
----
-
-### 2.3 Memory Types
+### 2.6 Memory Types
 
 #### FR-020: Working Memory
 The system SHALL maintain session-scoped working memory.
@@ -266,7 +582,7 @@ The system SHALL maintain persistent searchable archival memory.
 - Facts with citations (source file + line)
 - Architectural decisions (ADR links)
 - Learned patterns (success/failure)
-- Error resolutions (problem → solution)
+- Error resolutions (problem -> solution)
 
 **Metadata:**
 - Confidence scores (0.0-1.0)
@@ -292,14 +608,14 @@ The system SHALL perform periodic memory consolidation.
 **Triggers:**
 - Session end
 - 100+ memory operations
-- Manual trigger via tool
+- Manual trigger via skill
 
 **Priority:** P1 (Should Have)
 **Traces To:** US-017
 
 ---
 
-### 2.4 Hybrid Search
+### 2.7 Hybrid Search
 
 #### FR-030: Vector Search
 The system SHALL perform embedding-based semantic search.
@@ -334,7 +650,7 @@ The system SHALL combine search results using RRF.
 
 **Algorithm:**
 ```
-score(d) = Σ 1/(k + rank_i(d))
+score(d) = SUM 1/(k + rank_i(d))
 ```
 
 **Configuration:**
@@ -361,7 +677,7 @@ The system SHALL re-rank fused results by additional factors.
 
 ---
 
-### 2.5 Embeddings
+### 2.8 Embeddings
 
 #### FR-040: Embedding Provider Abstraction
 The system SHALL support multiple embedding providers.
@@ -420,7 +736,7 @@ The system SHALL function without embedding server.
 
 ---
 
-### 2.6 Knowledge Graph
+### 2.9 Knowledge Graph
 
 #### FR-050: Entity Management
 The system SHALL manage knowledge graph entities.
@@ -433,7 +749,7 @@ The system SHALL manage knowledge graph entities.
 - Error (description, solution, context)
 
 **Operations:**
-- Create entity
+- Create entity (implicit in memory_store)
 - Update entity
 - Query entities by type
 - Delete entity (soft)
@@ -447,12 +763,12 @@ The system SHALL manage knowledge graph entities.
 The system SHALL manage knowledge graph relationships.
 
 **Relationship Types:**
-- `implements` (function → interface)
-- `depends_on` (file → file)
-- `satisfies` (code → requirement)
-- `calls` (function → function)
-- `contradicts` (fact → fact)
-- `supersedes` (decision → decision)
+- `implements` (function -> interface)
+- `depends_on` (file -> file)
+- `satisfies` (code -> requirement)
+- `calls` (function -> function)
+- `contradicts` (fact -> fact)
+- `supersedes` (decision -> decision)
 
 **Priority:** P1 (Should Have)
 **Traces To:** US-024
@@ -490,19 +806,20 @@ The system SHALL provide graph query operations.
 
 ---
 
-### 2.7 Context Engineering
+### 2.10 Context Engineering
 
 #### FR-060: Auto-Compact
 The system SHALL auto-compact context at threshold.
 
 **Trigger:** Context window > 95% capacity
 
-**Behavior:**
-1. Detect context threshold exceeded
-2. Summarize conversation history
-3. Extract key facts to archival memory
-4. Replace verbose content with summary
-5. Report compaction to user
+**Behavior (Skill-driven):**
+1. Skill detects high usage
+2. Skill invokes `compact.sh` script
+3. Script summarizes conversation history
+4. Key facts stored to archival memory
+5. Summary replaces verbose content
+6. Report compaction to user
 
 **Priority:** P0 (Must Have)
 **Traces To:** US-027, US-028
@@ -523,17 +840,17 @@ The system SHALL enforce token budgets by category.
 **Behavior:**
 - Track usage per category
 - Priority-based eviction on overflow
-- Report usage via `context_status`
+- Report usage via skill status
 
 **Priority:** P0 (Must Have)
 **Traces To:** US-029
 
 ---
 
-#### FR-062: Context Status Tool
+#### FR-062: Context Status
 The system SHALL report context and memory status.
 
-**Output:**
+**Output (via Skill reading storage):**
 ```typescript
 {
   tokenUsage: {
@@ -562,7 +879,7 @@ The system SHALL report context and memory status.
 
 ---
 
-### 2.8 Session Management
+### 2.11 Session Management
 
 #### FR-070: Session Save
 The system SHALL persist full session state.
@@ -573,6 +890,8 @@ The system SHALL persist full session state.
 - Conversation summary
 - Active task context
 - Timestamp
+
+**Trigger:** Hook (HK-005) or MCP tool (T-004)
 
 **Priority:** P0 (Must Have)
 **Traces To:** US-031
@@ -589,13 +908,15 @@ The system SHALL restore previous session state.
 4. Inject conversation summary
 5. Report restoration to user
 
+**Trigger:** Hook (HK-001) or MCP tool (T-005)
+
 **Priority:** P0 (Must Have)
 **Traces To:** US-032
 
 ---
 
 #### FR-072: Session List
-The system SHALL list available sessions.
+The system SHALL list available sessions (via Skill).
 
 **Output:**
 ```typescript
@@ -615,7 +936,7 @@ The system SHALL list available sessions.
 
 ---
 
-### 2.9 Project Isolation
+### 2.12 Project Isolation
 
 #### FR-080: Project Identification
 The system SHALL identify projects uniquely.
@@ -624,7 +945,7 @@ The system SHALL identify projects uniquely.
 1. Git root path hash (SHA256)
 2. CLAUDE.md path hash
 3. Working directory hash
-4. Manual override via tool
+4. Manual override via skill
 
 **Priority:** P0 (Must Have)
 **Traces To:** US-034
@@ -642,7 +963,7 @@ The system SHALL use separate databases per project.
 ---
 
 #### FR-082: Project Switch
-The system SHALL support explicit project switching.
+The system SHALL support automatic project switching via Hook (HK-006).
 
 **Behavior:**
 1. Save current project session
@@ -669,7 +990,7 @@ The system SHALL prevent cross-project contamination.
 
 ---
 
-### 2.10 Storage
+### 2.13 Storage
 
 #### FR-090: SQLite Database
 The system SHALL use SQLite for all persistence.
@@ -713,7 +1034,7 @@ The system SHALL support data backup.
 
 ---
 
-### 2.11 Configuration
+### 2.14 Configuration
 
 #### FR-100: Global Configuration
 The system SHALL read global configuration.
@@ -799,6 +1120,17 @@ The system SHALL use <100MB disk per project (1000 memories).
 
 ---
 
+#### NFR-006: Token Overhead
+The system SHALL consume <2000 tokens for memory operations.
+
+**Measurement:** Token count for skill + tool call + response
+
+**Target:** 75% lower than pure MCP (~8000 tokens)
+
+**Priority:** P0 (Must Have)
+
+---
+
 ### 3.2 Reliability
 
 #### NFR-010: Data Durability
@@ -859,8 +1191,9 @@ The system SHALL include comprehensive documentation.
 **Documents:**
 - README with quick start
 - Installation guide
-- Configuration reference
-- API documentation
+- Skill reference
+- MCP API reference
+- Hooks reference
 - Troubleshooting guide
 
 **Priority:** P1 (Should Have)
@@ -925,6 +1258,13 @@ The system SHALL track MCP SDK stable releases.
 
 ---
 
+#### NFR-043: Claude Code Compatibility
+The system SHALL be compatible with Claude Code hooks and skills API.
+
+**Priority:** P0 (Must Have)
+
+---
+
 ### 3.6 Quality
 
 #### NFR-050: Test Coverage
@@ -967,14 +1307,26 @@ The system SHALL achieve <5% cross-project errors.
 
 ### Functional Requirements to User Stories
 
-| FR | US |
-|----|----|
-| FR-001 | US-001, US-002 |
-| FR-002 | US-003, US-004, US-005 |
+| Requirement | User Stories |
+|-------------|--------------|
+| SK-001 | US-001, US-002 |
+| SK-002 | US-027, US-028 |
+| SK-003 | US-029 |
+| MCP-001 | US-003, US-004 |
+| MCP-002 | US-005, US-006, US-007 |
+| MCP-003 | US-020 |
+| HK-001 | US-031, US-032 |
+| HK-002 | US-013, US-014 |
+| HK-003 | US-015 |
+| HK-004 | US-016 |
+| HK-005 | US-031 |
+| HK-006 | US-034, US-035 |
+| PL-001 | US-041 |
+| PL-002 | US-042 |
+| PL-003 | US-043 |
 | FR-010 | US-006, US-007 |
 | FR-011 | US-008, US-009 |
 | FR-012 | US-010 |
-| FR-013 | US-011 |
 | FR-020 | US-012 |
 | FR-021 | US-013, US-014 |
 | FR-022 | US-015, US-016 |
@@ -1066,3 +1418,21 @@ interface CoreMemory {
   };
 }
 ```
+
+### D. Hybrid Architecture Token Comparison
+
+| Approach | Token Cost | Capability | Notes |
+|----------|------------|------------|-------|
+| Pure MCP | ~8,000 | Full computation | 14 tools, schema overhead |
+| Pure Skill | ~100-5,000 | Limited | Can't do embeddings |
+| **Hybrid** | **~2,000** | **Full computation** | 6 tools + skill guidance |
+
+### E. Hook Event Reference
+
+| Event | Matcher | Use Case |
+|-------|---------|----------|
+| SessionStart | - | Auto-restore |
+| SessionEnd | - | Auto-save |
+| PreToolUse | Tool name pattern | Intercept before |
+| PostToolUse | Tool name pattern | Capture after |
+| DirectoryChange | - | Project switch |

@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.0 |
+| Version | 2.0 |
 | Date | 2026-01-16 |
 | Status | Draft |
 
@@ -20,33 +20,52 @@ Stories are prioritized as:
 
 ---
 
-## Epic 1: Core MCP Integration
+## Epic 1: Plugin Installation & Integration
 
-### US-001: Connect to Claude Code
+### US-001: Single-Command Installation
 **As a** Claude Code user,
-**I want** claude-memory to integrate seamlessly with Claude Code,
-**So that** I can use memory features without leaving my workflow.
+**I want** to install claude-memory with a single command,
+**So that** I can get started quickly without complex setup.
 
 **Priority:** P0
-**Traces To:** FR-001
+**Traces To:** SK-001, PL-002
 
 **Acceptance Criteria:**
-- [ ] Server starts with `npx claude-memory`
-- [ ] Registers with Claude Code via MCP
-- [ ] Tools appear in Claude's available tools
-- [ ] No manual configuration required
+- [ ] `/plugin install claude-memory` works
+- [ ] Skill copied to ~/.claude/skills/
+- [ ] MCP server configured in settings.json
+- [ ] Hooks merged into settings
+- [ ] Ollama model pulled if not present
 
 **Story Points:** 5
 
 ---
 
-### US-002: Reliable Protocol Communication
+### US-002: Skill Teaches Memory Patterns
 **As a** Claude Code user,
-**I want** claude-memory to communicate reliably with Claude,
+**I want** Claude to understand when and how to use memory,
+**So that** it stores and recalls information intelligently.
+
+**Priority:** P0
+**Traces To:** SK-001
+
+**Acceptance Criteria:**
+- [ ] SKILL.md teaches when to store (decisions, errors, patterns)
+- [ ] SKILL.md teaches query formulation
+- [ ] SKILL.md teaches memory type selection
+- [ ] Progressive disclosure (metadata ~100 tokens, full ~2000)
+
+**Story Points:** 5
+
+---
+
+### US-003: MCP Protocol Compliance
+**As a** Claude Code user,
+**I want** claude-memory to communicate reliably via MCP,
 **So that** memory operations don't fail or cause errors.
 
 **Priority:** P0
-**Traces To:** FR-001
+**Traces To:** MCP-001
 
 **Acceptance Criteria:**
 - [ ] JSON-RPC 2.0 messages handled correctly
@@ -58,55 +77,37 @@ Stories are prioritized as:
 
 ---
 
-### US-003: Discover Available Tools
+### US-004: Resource Exposure
 **As a** Claude Code user,
-**I want** to see what memory tools are available,
-**So that** I know what capabilities I have.
+**I want** to inspect memory state via MCP resources,
+**So that** I can understand what's stored.
 
-**Priority:** P0
-**Traces To:** FR-002
+**Priority:** P1
+**Traces To:** MCP-003
 
 **Acceptance Criteria:**
-- [ ] All 14 tools registered with descriptions
-- [ ] Tool schemas define input/output
-- [ ] Claude can list and describe tools
-- [ ] Help text is clear and actionable
+- [ ] `memory://stats` shows statistics
+- [ ] `memory://core` shows core memory blocks
+- [ ] `memory://graph` shows knowledge graph summary
+- [ ] Resources accessible via MCP protocol
 
 **Story Points:** 3
 
 ---
 
-### US-004: Use Memory Tools in Prompts
+### US-005: Discover Available Tools
 **As a** Claude Code user,
-**I want** Claude to automatically use memory tools when helpful,
-**So that** I don't have to explicitly request memory operations.
+**I want** to see what memory tools are available,
+**So that** I know what capabilities I have.
 
 **Priority:** P0
-**Traces To:** FR-002
+**Traces To:** MCP-002
 
 **Acceptance Criteria:**
-- [ ] Claude recalls relevant memories automatically
-- [ ] Claude stores important facts without prompting
-- [ ] Tools integrate naturally in conversation
-- [ ] No intrusive memory notifications
-
-**Story Points:** 5
-
----
-
-### US-005: Tool Error Handling
-**As a** Claude Code user,
-**I want** memory tool errors to be handled gracefully,
-**So that** errors don't disrupt my workflow.
-
-**Priority:** P0
-**Traces To:** FR-002
-
-**Acceptance Criteria:**
-- [ ] Errors include actionable messages
-- [ ] Failed tools don't crash the server
-- [ ] Claude can retry failed operations
-- [ ] Degraded mode for persistent issues
+- [ ] 6 tools registered with descriptions
+- [ ] Tool schemas define input/output
+- [ ] Claude can list and describe tools
+- [ ] Help text is clear and actionable
 
 **Story Points:** 3
 
@@ -120,7 +121,7 @@ Stories are prioritized as:
 **So that** Claude remembers them in future sessions.
 
 **Priority:** P0
-**Traces To:** FR-010
+**Traces To:** FR-010, MCP-002
 
 **Acceptance Criteria:**
 - [ ] `memory_store` accepts content and type
@@ -131,7 +132,7 @@ Stories are prioritized as:
 **Example:**
 ```
 Claude, remember that we use Zod for validation in this project.
-→ Stored memory: "This project uses Zod for validation" (fact)
+> Stored memory: "This project uses Zod for validation" (fact)
 ```
 
 **Story Points:** 5
@@ -173,7 +174,7 @@ Claude, remember that we use Zod for validation in this project.
 **Example:**
 ```
 What validation library do we use?
-→ Recall: "This project uses Zod for validation" (relevance: 0.92)
+> Recall: "This project uses Zod for validation" (relevance: 0.92)
 ```
 
 **Story Points:** 5
@@ -197,7 +198,7 @@ What validation library do we use?
 **Example:**
 ```
 memory_recall "TS-001"
-→ Finds memories mentioning "TS-001" exactly
+> Finds memories mentioning "TS-001" exactly
 ```
 
 **Story Points:** 3
@@ -221,7 +222,7 @@ memory_recall "TS-001"
 **Example:**
 ```
 Forget that we use Express - we migrated to Fastify.
-→ Deleted: "Express is the web framework" (reason: migrated to Fastify)
+> Deleted: "Express is the web framework" (reason: migrated to Fastify)
 ```
 
 **Story Points:** 3
@@ -234,10 +235,10 @@ Forget that we use Express - we migrated to Fastify.
 **So that** I can correct or enhance existing facts.
 
 **Priority:** P1
-**Traces To:** FR-013
+**Traces To:** SK-001 (skill orchestrates store + forget)
 
 **Acceptance Criteria:**
-- [ ] `memory_update` by ID
+- [ ] Skill orchestrates store + forget for updates
 - [ ] Updates content and re-embeds
 - [ ] Can mark as superseding old version
 - [ ] Conflict resolution (newer wins)
@@ -268,15 +269,15 @@ Forget that we use Express - we migrated to Fastify.
 
 ### US-013: Project Persona from CLAUDE.md
 **As a** developer,
-**I want** claude-memory to automatically load my CLAUDE.md,
+**I want** claude-memory to automatically sync my CLAUDE.md,
 **So that** Claude knows my project conventions immediately.
 
 **Priority:** P0
-**Traces To:** FR-021
+**Traces To:** FR-021, HK-002
 
 **Acceptance Criteria:**
-- [ ] CLAUDE.md parsed on first access
-- [ ] Stored in core memory persona block
+- [ ] Hook triggers on CLAUDE.md read
+- [ ] Parsed and stored in core memory persona block
 - [ ] Re-parsed when file changes
 - [ ] Included in every response context
 
@@ -301,7 +302,7 @@ Forget that we use Express - we migrated to Fastify.
 **Example:**
 ```
 Claude learns: "User prefers single-line if statements without braces"
-→ Core memory (human) updated
+> Core memory (human) updated
 ```
 
 **Story Points:** 5
@@ -314,13 +315,13 @@ Claude learns: "User prefers single-line if statements without braces"
 **So that** they persist across many sessions.
 
 **Priority:** P0
-**Traces To:** FR-022
+**Traces To:** FR-022, HK-003
 
 **Acceptance Criteria:**
 - [ ] Facts stored in archival memory
 - [ ] Include citations (source file + line)
 - [ ] Searchable by semantic and keyword
-- [ ] Survive server restarts
+- [ ] Hook logs file changes as facts
 
 **Story Points:** 3
 
@@ -332,19 +333,19 @@ Claude learns: "User prefers single-line if statements without braces"
 **So that** it can help faster with similar issues.
 
 **Priority:** P1
-**Traces To:** FR-022
+**Traces To:** FR-022, HK-004
 
 **Acceptance Criteria:**
-- [ ] Error → solution pairs stored
+- [ ] Hook captures Bash errors automatically
+- [ ] Error -> solution pairs stored
 - [ ] Retrieved when similar errors occur
 - [ ] Includes context (file, stack trace pattern)
-- [ ] Ranked by relevance to current error
 
 **Example:**
 ```
-Previously: "CORS error in API" → "Add cors middleware"
+Previously: "CORS error in API" -> "Add cors middleware"
 Now: "Getting CORS blocked on /api/users"
-→ Recall: "Add cors middleware solved similar CORS error"
+> Recall: "Add cors middleware solved similar CORS error"
 ```
 
 **Story Points:** 5
@@ -382,15 +383,15 @@ Now: "Getting CORS blocked on /api/users"
 **Acceptance Criteria:**
 - [ ] Vector search for semantic similarity
 - [ ] BM25 for exact keyword matching
-- [ ] RRF fusion combines results
+- [ ] RRF fusion combines results (k=60)
 - [ ] Better recall than either alone
 
 **Example:**
 ```
 Query: "how to handle TS-001 validation"
-→ Semantic: finds validation-related memories
-→ BM25: finds memories with "TS-001" exactly
-→ RRF: combines both, ranks best matches first
+> Semantic: finds validation-related memories
+> BM25: finds memories with "TS-001" exactly
+> RRF: combines both, ranks best matches first
 ```
 
 **Story Points:** 8
@@ -421,7 +422,7 @@ Query: "how to handle TS-001 validation"
 **So that** I can understand and tune behavior.
 
 **Priority:** P1
-**Traces To:** FR-003
+**Traces To:** MCP-003
 
 **Acceptance Criteria:**
 - [ ] Search stats in response
@@ -550,8 +551,8 @@ To enable semantic search, run: ollama serve
 **Example:**
 ```
 graph_query "find_connected" entity="UserService" depth=2
-→ UserService → UserRepository → Database
-→ UserService → AuthMiddleware → Session
+> UserService -> UserRepository -> Database
+> UserService -> AuthMiddleware -> Session
 ```
 
 **Story Points:** 5
@@ -566,13 +567,13 @@ graph_query "find_connected" entity="UserService" depth=2
 **So that** I don't hit context limits mid-task.
 
 **Priority:** P0
-**Traces To:** FR-060
+**Traces To:** FR-060, SK-002
 
 **Acceptance Criteria:**
-- [ ] Trigger at 95% context capacity
-- [ ] Summarize conversation history
-- [ ] Extract key facts to archival
-- [ ] Replace verbose with summary
+- [ ] Skill detects 95% context capacity
+- [ ] Invokes compact.sh script
+- [ ] Summarizes conversation history
+- [ ] Extracts key facts to archival
 
 **Story Points:** 8
 
@@ -584,7 +585,7 @@ graph_query "find_connected" entity="UserService" depth=2
 **So that** Claude doesn't forget critical context.
 
 **Priority:** P0
-**Traces To:** FR-060
+**Traces To:** FR-060, SK-002
 
 **Acceptance Criteria:**
 - [ ] Decisions explicitly extracted
@@ -602,13 +603,13 @@ graph_query "find_connected" entity="UserService" depth=2
 **So that** I can understand what's using space.
 
 **Priority:** P1
-**Traces To:** FR-061
+**Traces To:** FR-061, SK-003
 
 **Acceptance Criteria:**
 - [ ] Budget by category (core, working, archival, task)
 - [ ] Current usage vs limits
 - [ ] Warning when approaching limits
-- [ ] Available via `context_status`
+- [ ] Skill provides progressive disclosure
 
 **Story Points:** 3
 
@@ -635,49 +636,44 @@ graph_query "find_connected" entity="UserService" depth=2
 
 ## Epic 8: Session Management
 
-### US-031: Save Session State
+### US-031: Automatic Session Save
 **As a** developer,
-**I want** to save my current session,
-**So that** I can continue later where I left off.
+**I want** my session auto-saved when I exit,
+**So that** I never lose my context.
 
 **Priority:** P0
-**Traces To:** FR-070
+**Traces To:** FR-070, HK-005
 
 **Acceptance Criteria:**
-- [ ] `session_save` persists full state
+- [ ] Hook triggers on session end
+- [ ] Persists full state automatically
 - [ ] Includes working memory
 - [ ] Includes core memory
 - [ ] Includes conversation summary
-
-**Example:**
-```
-session_save
-→ Session saved: sess_abc123 (2026-01-16 14:30)
-```
 
 **Story Points:** 5
 
 ---
 
-### US-032: Restore Previous Session
+### US-032: Automatic Session Restore
 **As a** developer,
-**I want** to restore a previous session,
+**I want** my previous session auto-restored when I start,
 **So that** Claude has full context immediately.
 
 **Priority:** P0
-**Traces To:** FR-071
+**Traces To:** FR-071, HK-001
 
 **Acceptance Criteria:**
-- [ ] `session_restore` loads state
+- [ ] Hook triggers on session start
 - [ ] Working memory restored
 - [ ] Core memory restored
 - [ ] Summary injected to context
 
 **Example:**
 ```
-session_restore
-→ Restored: sess_abc123 (created 2026-01-16)
-→ Context: "We were implementing the user authentication flow..."
+(session start)
+> Restored: sess_abc123 (created 2026-01-16)
+> Context: "We were implementing the user authentication flow..."
 ```
 
 **Story Points:** 5
@@ -693,10 +689,10 @@ session_restore
 **Traces To:** FR-072
 
 **Acceptance Criteria:**
-- [ ] `session_list` shows all sessions
+- [ ] Skill reads session storage
+- [ ] Shows all sessions
 - [ ] Includes creation time
 - [ ] Includes summary/context preview
-- [ ] Most recent first
 
 **Story Points:** 3
 
@@ -710,7 +706,7 @@ session_restore
 **So that** I don't need to configure anything.
 
 **Priority:** P0
-**Traces To:** FR-080, FR-081
+**Traces To:** FR-080, FR-081, HK-006
 
 **Acceptance Criteria:**
 - [ ] Detect git root or CLAUDE.md
@@ -722,25 +718,25 @@ session_restore
 
 ---
 
-### US-035: Switch Between Projects
+### US-035: Automatic Project Switching
 **As a** developer,
-**I want** to switch between projects,
-**So that** I can work on multiple codebases.
+**I want** projects to switch automatically when I change directories,
+**So that** I don't need to manually switch.
 
 **Priority:** P0
-**Traces To:** FR-082
+**Traces To:** FR-082, HK-006
 
 **Acceptance Criteria:**
-- [ ] `project_switch` changes active project
+- [ ] Hook detects directory change
 - [ ] Saves current session first
 - [ ] Loads target project memory
 - [ ] Clear transition message
 
 **Example:**
 ```
-project_switch path="/Users/me/other-project"
-→ Saved session for project-a
-→ Switched to project-b (47 memories)
+(cd to different project)
+> Saved session for project-a
+> Switched to project-b (47 memories)
 ```
 
 **Story Points:** 5
@@ -839,22 +835,129 @@ project_switch path="/Users/me/other-project"
 
 ---
 
+## Epic 11: Plugin Distribution
+
+### US-041: Plugin Manifest
+**As a** plugin developer,
+**I want** a standard manifest format,
+**So that** claude-memory can be distributed as a package.
+
+**Priority:** P0
+**Traces To:** PL-001
+
+**Acceptance Criteria:**
+- [ ] `.claude-plugin/manifest.json` exists
+- [ ] Defines skill, MCP, and hooks components
+- [ ] Specifies dependencies
+- [ ] Version tracking
+
+**Story Points:** 3
+
+---
+
+### US-042: Repository Installation
+**As a** developer,
+**I want** to install from GitHub,
+**So that** I can use development versions.
+
+**Priority:** P0
+**Traces To:** PL-002
+
+**Acceptance Criteria:**
+- [ ] `/plugin install github:user/claude-memory`
+- [ ] Clones repository
+- [ ] Runs install script
+- [ ] Configures all components
+
+**Example:**
+```
+/plugin install github:anthropics/claude-memory
+> Cloning repository...
+> Installing skill to ~/.claude/skills/memory/
+> Configuring MCP server...
+> Merging hooks...
+> Pulling nomic-embed-text-v2-moe...
+> Installation complete!
+```
+
+**Story Points:** 5
+
+---
+
+### US-043: Marketplace Distribution
+**As a** developer,
+**I want** claude-memory available in a marketplace,
+**So that** discovery and installation is easy.
+
+**Priority:** P2
+**Traces To:** PL-003
+
+**Acceptance Criteria:**
+- [ ] `.claude-plugin/marketplace.json` exists
+- [ ] Category and tags defined
+- [ ] Screenshots provided
+- [ ] Changelog maintained
+
+**Story Points:** 3
+
+---
+
+## Epic 12: Hook Automation
+
+### US-044: Error Learning Hook
+**As a** developer,
+**I want** errors captured automatically,
+**So that** Claude learns from my mistakes.
+
+**Priority:** P1
+**Traces To:** HK-004
+
+**Acceptance Criteria:**
+- [ ] PostToolUse hook on Bash errors
+- [ ] Extracts error message and context
+- [ ] Stores as ERROR memory type
+- [ ] Links to related code entities
+
+**Story Points:** 3
+
+---
+
+### US-045: File Change Logging
+**As a** developer,
+**I want** file changes logged automatically,
+**So that** Claude knows what was modified.
+
+**Priority:** P1
+**Traces To:** HK-003
+
+**Acceptance Criteria:**
+- [ ] PostToolUse hook on Edit|Write
+- [ ] Logs file path and change summary
+- [ ] Updates knowledge graph entities
+- [ ] No manual action required
+
+**Story Points:** 3
+
+---
+
+---
+
 ## Story Summary
 
 ### By Priority
 
 | Priority | Count | Story Points |
 |----------|-------|--------------|
-| P0 (Must Have) | 26 | 112 |
-| P1 (Should Have) | 12 | 49 |
+| P0 (Must Have) | 28 | 127 |
+| P1 (Should Have) | 15 | 60 |
 | P2 (Nice to Have) | 2 | 8 |
-| **Total** | **40** | **169** |
+| **Total** | **45** | **195** |
 
 ### By Epic
 
 | Epic | Stories | Points |
 |------|---------|--------|
-| 1. Core MCP | 5 | 19 |
+| 1. Plugin Installation | 5 | 19 |
 | 2. Memory Storage | 6 | 24 |
 | 3. Memory Types | 6 | 28 |
 | 4. Hybrid Search | 3 | 14 |
@@ -864,6 +967,8 @@ project_switch path="/Users/me/other-project"
 | 8. Session Management | 3 | 13 |
 | 9. Project Isolation | 3 | 13 |
 | 10. Storage & Config | 4 | 14 |
+| 11. Plugin Distribution | 3 | 11 |
+| 12. Hook Automation | 2 | 6 |
 
 ---
 
@@ -871,46 +976,51 @@ project_switch path="/Users/me/other-project"
 
 | User Story | Functional Requirements |
 |------------|------------------------|
-| US-001 | FR-001 |
-| US-002 | FR-001 |
-| US-003 | FR-002 |
-| US-004 | FR-002 |
-| US-005 | FR-002 |
-| US-006 | FR-010 |
+| US-001 | SK-001, PL-002 |
+| US-002 | SK-001 |
+| US-003 | MCP-001 |
+| US-004 | MCP-003 |
+| US-005 | MCP-002 |
+| US-006 | FR-010, MCP-002 |
 | US-007 | FR-010 |
 | US-008 | FR-011 |
 | US-009 | FR-011 |
 | US-010 | FR-012 |
-| US-011 | FR-013 |
+| US-011 | SK-001 |
 | US-012 | FR-020 |
-| US-013 | FR-021 |
+| US-013 | FR-021, HK-002 |
 | US-014 | FR-021 |
-| US-015 | FR-022 |
-| US-016 | FR-022 |
+| US-015 | FR-022, HK-003 |
+| US-016 | FR-022, HK-004 |
 | US-017 | FR-023 |
 | US-018 | FR-030, FR-031, FR-032 |
 | US-019 | FR-033 |
-| US-020 | FR-003 |
+| US-020 | MCP-003 |
 | US-021 | FR-040, FR-041 |
 | US-022 | FR-042 |
 | US-023 | FR-043 |
 | US-024 | FR-050, FR-051 |
 | US-025 | FR-052 |
 | US-026 | FR-053 |
-| US-027 | FR-060 |
-| US-028 | FR-060 |
-| US-029 | FR-061 |
+| US-027 | FR-060, SK-002 |
+| US-028 | FR-060, SK-002 |
+| US-029 | FR-061, SK-003 |
 | US-030 | FR-062 |
-| US-031 | FR-070 |
-| US-032 | FR-071 |
+| US-031 | FR-070, HK-005 |
+| US-032 | FR-071, HK-001 |
 | US-033 | FR-072 |
-| US-034 | FR-080, FR-081 |
-| US-035 | FR-082 |
+| US-034 | FR-080, FR-081, HK-006 |
+| US-035 | FR-082, HK-006 |
 | US-036 | FR-083 |
 | US-037 | FR-090 |
 | US-038 | FR-091 |
 | US-039 | FR-092 |
 | US-040 | FR-100, FR-101, FR-102 |
+| US-041 | PL-001 |
+| US-042 | PL-002 |
+| US-043 | PL-003 |
+| US-044 | HK-004 |
+| US-045 | HK-003 |
 
 ---
 
@@ -920,5 +1030,18 @@ project_switch path="/Users/me/other-project"
 |---------|-------------|
 | Alex (Senior Dev) | US-006, US-008, US-018, US-027, US-031 |
 | Sarah (Tech Lead) | US-020, US-024, US-030, US-036, US-039 |
-| Jordan (OSS Maintainer) | US-034, US-035, US-036, US-032 |
-| Morgan (AI-Curious Dev) | US-001, US-004, US-013, US-023 |
+| Jordan (OSS Maintainer) | US-034, US-035, US-036, US-032, US-042 |
+| Morgan (AI-Curious Dev) | US-001, US-002, US-013, US-023, US-041 |
+
+---
+
+## Hybrid Architecture Alignment
+
+This user stories document reflects the hybrid plugin architecture:
+
+| Component | Related Stories |
+|-----------|----------------|
+| **Skill Layer** | US-002, US-011, US-027, US-028, US-029 |
+| **MCP Server** | US-003, US-004, US-005, US-006, US-008, US-010 |
+| **Hooks Layer** | US-013, US-015, US-016, US-031, US-032, US-034, US-035, US-044, US-045 |
+| **Plugin Distribution** | US-001, US-041, US-042, US-043 |
