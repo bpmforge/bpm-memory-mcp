@@ -1,7 +1,7 @@
 # Project: claude-memory
 
 ## Description
-An MCP (Model Context Protocol) server providing persistent intelligent memory for Claude Code sessions. Features local embeddings, hybrid search (vector + BM25), knowledge graph with temporal awareness, and context compression. Designed to dramatically reduce token usage, eliminate redundant file reads, and maintain context across sessions.
+A hybrid Claude Code plugin providing persistent intelligent memory through the optimal combination of Skills, MCP Server, and Hooks. Features local embeddings (Ollama), hybrid search (vector + BM25 with RRF fusion), knowledge graph with temporal awareness, and context compression. Achieves 75% lower token overhead than pure MCP solutions while maintaining full computational capability.
 
 ## SDLC State
 - Current Phase: 2 (Requirements)
@@ -18,11 +18,14 @@ An MCP (Model Context Protocol) server providing persistent intelligent memory f
 | 4 | Pending | - | - |
 
 ## Key Decisions
-- **Type**: MCP Server (Claude Code native integration)
-- **Embeddings**: Local-first (LM Studio, Ollama with nomic-embed-text)
-- **Storage**: SQLite with BLOB for vectors
-- **Search**: Hybrid (Vector similarity + BM25 keyword with RRF fusion)
-- **Memory Types**: Session (working), Archival (long-term), Knowledge Graph
+- **Architecture**: Hybrid Plugin (Skill + MCP + Hooks) for 75% lower token overhead
+- **Skill Layer**: SKILL.md teaches Claude when/how to use memory (~2000 tokens)
+- **MCP Server**: 6 focused tools (memory_store, memory_recall, memory_forget, session_save, session_restore, graph_query)
+- **Hooks Layer**: Deterministic automation (session restore/save, project switch, error capture)
+- **Embeddings**: Local-first (Ollama with nomic-embed-text-v2-moe)
+- **Storage**: SQLite with BLOB for vectors, FTS5 for BM25
+- **Search**: Hybrid (Vector + BM25 with RRF fusion, k=60)
+- **Memory Types**: Working (20%), Core/MemGPT-style (15%), Archival (25%), Task (40%)
 - **Tech Stack**: TypeScript (MCP SDK compatibility)
 
 ## Research Sources
@@ -38,24 +41,39 @@ An MCP (Model Context Protocol) server providing persistent intelligent memory f
 - Add unnecessary abstractions
 - Over-engineer embedding strategies
 - Create complex caching without benchmarks
+- Exceed 6 MCP tools (keep token overhead low)
 
 ### DO
 - Follow MCP SDK conventions exactly
 - Use SQLite for all persistence (simple, portable)
 - Implement hybrid search from day one
 - Test with real Claude Code sessions
+- Keep skill under 2000 tokens when fully loaded
+- Use hooks for deterministic automation
 
 ## Architecture Overview
 ```
 claude-memory/
-├── src/
-│   ├── mcp/           # MCP server, tools, handlers
-│   ├── memory/        # Session, archival, compressor
-│   ├── knowledge/     # Graph, extractor, temporal
-│   ├── embeddings/    # LM Studio, Ollama, cache
-│   ├── search/        # Vector, BM25, hybrid (RRF)
-│   ├── context/       # Optimizer, budget, compression
-│   └── storage/       # SQLite adapter, migrations
+├── .claude-plugin/
+│   ├── manifest.json     # Plugin metadata
+│   └── marketplace.json  # Distribution info
+├── skills/
+│   └── memory/
+│       ├── SKILL.md      # Memory skill (teaches Claude)
+│       └── scripts/
+│           ├── compact.sh    # Context summarization
+│           └── validate.sh   # Memory validation
+├── mcp/
+│   └── memory-server/
+│       └── src/
+│           ├── index.ts      # MCP server entry
+│           ├── embeddings/   # Ollama integration
+│           ├── search/       # Hybrid search (Vector + BM25)
+│           ├── storage/      # SQLite + FTS5
+│           ├── graph/        # Knowledge graph
+│           └── session/      # Session management
+├── hooks/
+│   └── settings.json     # Hook configurations
 ├── tests/
 └── docs/
 ```
