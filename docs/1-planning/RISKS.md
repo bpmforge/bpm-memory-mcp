@@ -2,244 +2,349 @@
 
 ## Risk Register
 
-### R-001: Embedding Quality Degradation
+### R-001: Embedding Quality vs Competitors
 
 **Category**: Technical
 **Probability**: Medium
 **Impact**: High
 **Risk Score**: High
 
-**Description**: Local embedding models (nomic-embed-text) may produce lower quality embeddings than cloud models (OpenAI ada-002), leading to poor semantic search results and irrelevant memory retrieval.
+**Description**: nomic-embed-text-v2-moe may not outperform mcp-memory-service's MiniLM-L6-v2 on code-specific retrieval tasks, negating our differentiation claim.
+
+**Research Finding**: According to [BentoML benchmarks](https://www.bentoml.com/blog/a-guide-to-open-source-embedding-models), nomic-embed-text v1 achieves 86.2% top-5 accuracy, but v2-moe is newer and less battle-tested.
 
 **Indicators**:
-- Search results frequently miss relevant content
+- Search results miss obvious matches
 - User reports of "Claude forgot" despite stored memories
-- Low precision/recall in retrieval benchmarks
+- Benchmark scores below MiniLM baseline
 
 **Mitigation**:
-1. Benchmark multiple local models during development
-2. Implement hybrid search (vector + BM25) to compensate
-3. Allow configurable embedding providers
-4. Add relevance feedback mechanism
+1. Benchmark both models during development
+2. Hybrid search compensates for embedding weaknesses
+3. Allow configurable model selection
+4. Matryoshka dimensions (768→256) may lose precision
 
-**Contingency**: Fall back to keyword-only search if embedding quality unacceptable.
+**Contingency**: Support MiniLM-L6-v2 as alternative option.
 
 ---
 
-### R-002: Storage Bloat
+### R-002: Hybrid Search Complexity
 
 **Category**: Technical
 **Probability**: Medium
 **Impact**: Medium
 **Risk Score**: Medium
 
-**Description**: Embedding vectors (768 dimensions × 4 bytes = 3KB per embedding) and accumulated memories may cause database to grow unboundedly, impacting performance and disk usage.
+**Description**: RRF fusion with k=60 may not work optimally for our specific use case (code memories), requiring extensive tuning.
+
+**Research Finding**: [OpenSearch](https://opensearch.org/blog/introducing-reciprocal-rank-fusion-hybrid-search/) notes "k can be tuned based on your specific use case" - suggesting one-size-fits-all may not work.
 
 **Indicators**:
-- Database size exceeds 500MB
-- Query latency increases over time
-- Disk space warnings
+- Hybrid search performs worse than vector-only
+- Keyword matches dominate inappropriately
+- Tuning k doesn't improve results
 
 **Mitigation**:
-1. Implement automatic pruning based on access frequency
-2. Set configurable retention limits
-3. Use compression for older embeddings
-4. Provide manual cleanup tools
+1. Start with k=60 (empirical standard)
+2. Implement configurable weights (vector/BM25)
+3. A/B test different configurations
+4. Provide fallback to single-mode search
 
-**Contingency**: Implement aggressive LRU eviction policy.
+**Contingency**: Default to vector-only like competitors.
 
 ---
 
-### R-003: Stale Memory Contamination
+### R-003: Stale Memory Contamination (Critical)
+
+**Category**: Technical
+**Probability**: High
+**Impact**: Critical
+**Risk Score**: Critical
+
+**Description**: Outdated memories cause wrong decisions. This is the #1 failure mode in memory systems.
+
+**Research Finding**: [AIMultiple benchmark](https://research.aimultiple.com/memory-mcp/) found systems "occasionally mix information from different projects" - staleness is a known problem.
+
+**Indicators**:
+- User corrections of Claude's statements
+- Conflicts between memory and current code
+- "Hallucinations" traceable to old memories
+
+**Mitigation**:
+1. Temporal decay function (older = lower weight)
+2. Mandatory citations for all memories
+3. Confidence scoring based on validation
+4. Contradiction detection between memories
+5. Easy `memory_forget` with provenance
+6. Consolidation system with cleanup
+
+**Contingency**: Aggressive decay + manual cleanup tools.
+
+---
+
+### R-004: Context Window Overflow (Critical)
 
 **Category**: Technical
 **Probability**: High
 **Impact**: High
 **Risk Score**: Critical
 
-**Description**: Outdated or incorrect memories may be surfaced, causing Claude to make wrong decisions or provide incorrect information based on stale context.
+**Description**: Memory injection pushes essential content out of Claude's context window, making the situation worse.
+
+**Research Finding**: [LlamaIndex context engineering](https://www.llamaindex.ai/blog/context-engineering-what-it-is-and-techniques-to-consider) emphasizes "auto-compact at 95% capacity" as essential.
 
 **Indicators**:
-- User corrections of Claude's statements
-- Conflicts between memory and current code state
-- "Hallucinations" traceable to old memories
+- Claude loses track of current task
+- Important files truncated
+- User asks to "forget" memories
 
 **Mitigation**:
-1. Implement temporal decay function (older = lower weight)
-2. Require citations for all retrieved memories
-3. Add confidence scoring based on validation
-4. Implement contradiction detection
-5. Provide easy "forget" mechanism
+1. Strict token budget management (15/20/25/40%)
+2. Auto-compact at 95% threshold
+3. Priority-based eviction
+4. Configurable memory injection
+5. "Minimal memory" mode option
 
-**Contingency**: Clear project memory and rebuild from scratch.
+**Contingency**: Disable auto-injection, manual recall only.
 
 ---
 
-### R-004: MCP Protocol Breaking Changes
+### R-005: Project Isolation Failures
 
-**Category**: External
-**Probability**: Low
-**Impact**: Critical
+**Category**: Technical
+**Probability**: Medium
+**Impact**: High
 **Risk Score**: High
 
-**Description**: Anthropic may change the MCP protocol in ways that break compatibility, requiring significant rework.
+**Description**: Despite separate databases, cross-project contamination still occurs.
+
+**Research Finding**: [AIMultiple benchmark](https://research.aimultiple.com/memory-mcp/) identifies project isolation as the "#1 complaint" about existing systems.
 
 **Indicators**:
-- Claude Code update announcements
-- MCP SDK version changes
-- Integration test failures
+- Wrong project memories surfaced
+- User confusion about context
+- Incorrect code suggestions from other projects
 
 **Mitigation**:
-1. Pin to stable MCP SDK version
-2. Abstract MCP layer for easier updates
-3. Monitor Anthropic announcements
-4. Participate in MCP community discussions
+1. Separate SQLite files per project
+2. Project ID tagging on every memory
+3. Validation at retrieval time
+4. Explicit `project_switch` command
+5. Warning on ambiguous queries
+6. Audit logging
 
-**Contingency**: Maintain compatibility shim for one major version back.
+**Contingency**: Require explicit project selection at session start.
 
 ---
 
-### R-005: Local Embedding Server Unavailability
+### R-006: Ollama/Embedding Server Unavailability
 
 **Category**: Operational
 **Probability**: Medium
 **Impact**: Medium
 **Risk Score**: Medium
 
-**Description**: Users may not have LM Studio or Ollama running, or the embedding server may crash, leaving the system unable to create new embeddings.
+**Description**: Users don't have Ollama running, or it crashes, breaking embedding functionality.
+
+**Research Finding**: [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) uses ONNX embeddings to avoid this - we depend on external server.
 
 **Indicators**:
-- Connection refused errors to embedding endpoint
-- Timeout errors during embedding generation
-- User reports of "memory not working"
+- Connection refused errors
+- Timeout during embedding
+- "Memory not working" reports
 
 **Mitigation**:
-1. Graceful degradation to keyword-only search
+1. Graceful degradation to BM25-only
 2. Clear error messages with setup instructions
-3. Embedding queue with retry logic
-4. Cache embeddings aggressively
+3. Retry queue with exponential backoff
+4. Health check endpoint
+5. LM Studio as fallback provider
 
-**Contingency**: Provide pre-computed embeddings for common patterns.
+**Contingency**: Consider ONNX embeddings like mcp-memory-service.
 
 ---
 
-### R-006: Performance Degradation at Scale
+### R-007: Performance at Scale
 
 **Category**: Technical
 **Probability**: Medium
 **Impact**: Medium
 **Risk Score**: Medium
 
-**Description**: As memory grows (thousands of facts, millions of tokens), search and retrieval may become too slow for interactive use.
+**Description**: As memories grow (1000+ facts), search becomes too slow for interactive use.
+
+**Research Finding**: [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) claims "5ms local reads" with optimized SQLite - we need similar performance.
 
 **Indicators**:
 - Search latency >500ms
-- Memory recall adds noticeable delay
-- Users disabling memory features
+- Memory operations delay responses
+- Users disable memory
 
 **Mitigation**:
-1. Use SQLite indexes effectively
-2. Implement approximate nearest neighbor (ANN) search
-3. Batch and cache common queries
-4. Partition by project/time
+1. SQLite indexes on all query fields
+2. Embedding cache to avoid re-computation
+3. Pagination for large results
+4. Consolidation to reduce memory count
+5. VACUUM on database periodically
 
-**Contingency**: Implement memory "compaction" to merge similar entries.
+**Contingency**: Implement memory limits with LRU eviction.
 
 ---
 
-### R-007: Context Window Overflow
+### R-008: MCP Protocol Changes
 
-**Category**: Technical
-**Probability**: Medium
-**Impact**: High
-**Risk Score**: High
-
-**Description**: Memory injection may push essential content out of Claude's context window, making the situation worse instead of better.
-
-**Indicators**:
-- Claude loses track of current task
-- Important files get truncated
-- User explicitly asks Claude to "forget" memories
-
-**Mitigation**:
-1. Implement strict token budget management
-2. Prioritize current task context over historical
-3. Make memory injection configurable/disableable
-4. Monitor context utilization
-
-**Contingency**: Provide "minimal memory" mode with only critical facts.
-
----
-
-### R-008: Data Loss or Corruption
-
-**Category**: Technical
+**Category**: External
 **Probability**: Low
 **Impact**: Critical
 **Risk Score**: Medium
 
-**Description**: SQLite database may become corrupted due to crashes, disk issues, or bugs, resulting in loss of accumulated project knowledge.
+**Description**: Anthropic changes MCP protocol, breaking compatibility.
+
+**Research Finding**: MCP is relatively new (2024) and still evolving.
 
 **Indicators**:
-- SQLite integrity check failures
-- Query errors on previously working data
-- Missing or garbled memories
+- Claude Code updates break integration
+- MCP SDK version changes
+- Protocol deprecation notices
 
 **Mitigation**:
-1. Use SQLite WAL mode for crash safety
-2. Implement regular backups
-3. Add database integrity checks
-4. Provide export/import functionality
+1. Pin to stable MCP SDK version
+2. Abstract MCP layer for easier updates
+3. Monitor Anthropic announcements
+4. Integration tests against multiple SDK versions
 
-**Contingency**: Rebuild memory from git history and CLAUDE.md.
+**Contingency**: Maintain compatibility with SDK n-1.
 
 ---
 
-### R-009: Privacy/Security Concerns
+### R-009: Consolidation Causing Data Loss
 
-**Category**: Security
+**Category**: Technical
 **Probability**: Low
 **Impact**: High
 **Risk Score**: Medium
 
-**Description**: Memory may inadvertently store sensitive information (credentials, PII, proprietary code) that users don't want persisted.
+**Description**: Aggressive consolidation (merging, archiving, cleanup) accidentally removes important memories.
+
+**Research Finding**: [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) uses "dream-inspired consolidation" - novel but potentially risky.
 
 **Indicators**:
-- User reports of sensitive data in memory
-- Security audit findings
-- Compliance concerns
+- Important facts disappear
+- User reports missing memories
+- Consolidation log shows unexpected deletions
 
 **Mitigation**:
-1. Never store content matching secret patterns (.env, credentials)
-2. Implement content filtering before storage
-3. Provide selective memory deletion
-4. Document what is/isn't stored
+1. Soft delete only (never hard delete)
+2. Full consolidation log with before/after
+3. Configurable aggressiveness
+4. "Protected" flag for critical memories
+5. Export/backup before consolidation
 
-**Contingency**: Implement full memory encryption at rest.
+**Contingency**: Disable automatic consolidation, manual only.
 
 ---
 
-### R-010: Adoption Friction
+### R-010: Memory Accuracy Claims Unverifiable
 
 **Category**: Business
 **Probability**: Medium
 **Impact**: Medium
 **Risk Score**: Medium
 
-**Description**: If setup is too complex or benefits not immediately obvious, users may not adopt the tool.
+**Description**: We claim 70% accuracy target, but industry benchmarks are disputed (Letta vs Mem0 controversy).
+
+**Research Finding**: [Letta blog](https://www.letta.com/blog/benchmarking-ai-agent-memory) disputes Mem0's LoCoMo results - benchmark methodology is contested.
 
 **Indicators**:
-- Low download/install numbers
-- High abandonment during setup
-- Negative user feedback
+- Different benchmarks give conflicting results
+- Community questions our metrics
+- Reproducibility issues
 
 **Mitigation**:
-1. Zero-config default mode (works without embedding server)
-2. One-line installation
-3. Clear onboarding documentation
-4. Visible token savings dashboard
+1. Use multiple benchmarks (LoCoMo, custom)
+2. Open-source our evaluation methodology
+3. Provide reproducible test suite
+4. Conservative claims with confidence intervals
 
-**Contingency**: Simplify to MVP feature set.
+**Contingency**: Focus on user-reported satisfaction over synthetic benchmarks.
+
+---
+
+### R-011: nomic-embed-text-v2-moe Availability
+
+**Category**: External
+**Probability**: Low
+**Impact**: High
+**Risk Score**: Medium
+
+**Description**: nomic-embed-text-v2-moe may not be available in Ollama, or model changes break compatibility.
+
+**Research Finding**: v2-moe is new (2026) and may have limited Ollama support initially.
+
+**Indicators**:
+- Model not found in Ollama
+- Pull fails or takes too long
+- Model output format changes
+
+**Mitigation**:
+1. Support multiple models (v1, v2, mxbai)
+2. Document minimum model requirements
+3. Test against Ollama releases
+4. LM Studio as fallback
+
+**Contingency**: Default to nomic-embed-text v1 (widely supported).
+
+---
+
+### R-012: TypeScript Performance vs Python
+
+**Category**: Technical
+**Probability**: Low
+**Impact**: Medium
+**Risk Score**: Low
+
+**Description**: TypeScript/Node.js may be slower than Python for numerical operations (embeddings, similarity).
+
+**Research Finding**: [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) uses Python with ONNX for performance.
+
+**Indicators**:
+- Similarity calculations slow
+- High CPU usage during search
+- Latency exceeds targets
+
+**Mitigation**:
+1. Use native SQLite for vector operations
+2. Offload heavy math to embedding server
+3. Cache computed similarities
+4. Consider native addon for hot paths
+
+**Contingency**: Acceptable tradeoff for ecosystem consistency.
+
+---
+
+### R-013: Auto-Compact Quality
+
+**Category**: Technical
+**Probability**: Medium
+**Impact**: Medium
+**Risk Score**: Medium
+
+**Description**: Summarization during auto-compact loses important details.
+
+**Research Finding**: [LlamaIndex](https://www.llamaindex.ai/blog/context-engineering-what-it-is-and-techniques-to-consider) notes "targeted summarization" is preferred over naive compression.
+
+**Indicators**:
+- Important decisions lost in summaries
+- User re-explains after compaction
+- Context quality degrades over session
+
+**Mitigation**:
+1. Extract key facts to archival before summarizing
+2. Preserve decision points explicitly
+3. Configurable summarization aggressiveness
+4. Manual review option before compact
+
+**Contingency**: Use simpler trimming (drop oldest) instead of summarization.
 
 ---
 
@@ -249,42 +354,56 @@
 Impact
   ^
   │
-H │  R-003   R-004   R-007
-  │  Stale   MCP     Context
+C │  R-003   R-004   R-008
+  │  Stale   Context  MCP
   │
-M │  R-001   R-002   R-006   R-008   R-010
-  │  Embed   Bloat   Perf    Data    Adopt
+H │  R-001   R-005   R-009   R-011
+  │  Embed   Isolate  Consol  Model
   │
-L │                  R-005   R-009
-  │                  Server  Privacy
+M │  R-002   R-006   R-007   R-010   R-013
+  │  Hybrid  Ollama  Scale   Bench   Compact
   │
-  └──────────────────────────────────────>
-     L        M        H     Probability
+L │                          R-012
+  │                          Perf
+  │
+  └──────────────────────────────────────────>
+     L        M        H        Probability
 ```
 
-## Risk Summary
+## Risk Summary by Priority
 
-| ID | Risk | Score | Owner | Status |
-|----|------|-------|-------|--------|
-| R-001 | Embedding Quality | High | Dev | Open |
-| R-002 | Storage Bloat | Medium | Dev | Open |
-| R-003 | Stale Memory | Critical | Dev | Open |
-| R-004 | MCP Changes | High | Dev | Open |
-| R-005 | Server Unavailable | Medium | Dev | Open |
-| R-006 | Performance | Medium | Dev | Open |
-| R-007 | Context Overflow | High | Dev | Open |
-| R-008 | Data Loss | Medium | Dev | Open |
-| R-009 | Privacy | Medium | Dev | Open |
-| R-010 | Adoption | Medium | Dev | Open |
+### Critical (Immediate Attention)
+| ID | Risk | Mitigation Priority |
+|----|------|-------------------|
+| R-003 | Stale Memory | Citations, decay, cleanup |
+| R-004 | Context Overflow | Token budgets, auto-compact |
 
-## Critical Risks Requiring Immediate Attention
+### High
+| ID | Risk | Mitigation Priority |
+|----|------|-------------------|
+| R-001 | Embedding Quality | Benchmark, hybrid search |
+| R-005 | Project Isolation | Separate DBs, validation |
+| R-008 | MCP Changes | Abstract layer, pin SDK |
 
-1. **R-003 (Stale Memory)**: Must implement citation and decay from day one
-2. **R-007 (Context Overflow)**: Token budget system is non-negotiable
-3. **R-004 (MCP Changes)**: Abstract MCP layer for flexibility
+### Medium
+| ID | Risk | Mitigation Priority |
+|----|------|-------------------|
+| R-002 | Hybrid Complexity | Configurable, fallback |
+| R-006 | Ollama Unavailable | Graceful degradation |
+| R-007 | Performance | Indexes, caching |
+| R-009 | Consolidation Loss | Soft delete, logging |
+| R-010 | Benchmark Disputes | Multiple benchmarks |
+| R-011 | Model Availability | Multi-model support |
+| R-013 | Compact Quality | Extract before summarize |
+
+### Low
+| ID | Risk | Mitigation Priority |
+|----|------|-------------------|
+| R-012 | TS vs Python Perf | Acceptable tradeoff |
 
 ## Risk Review Schedule
 
-- **Weekly**: Review R-003, R-007 during development
+- **Weekly**: R-003, R-004, R-005 (critical path)
+- **Bi-weekly**: All high/medium risks
 - **Monthly**: Full risk register review
-- **Per Release**: Update probabilities based on testing
+- **Per Phase**: Update probabilities based on progress

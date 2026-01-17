@@ -4,15 +4,15 @@
 An MCP (Model Context Protocol) server providing persistent intelligent memory for Claude Code sessions. Features local embeddings, hybrid search (vector + BM25), knowledge graph with temporal awareness, and context compression. Designed to dramatically reduce token usage, eliminate redundant file reads, and maintain context across sessions.
 
 ## SDLC State
-- Current Phase: 1 (Planning)
-- Phases Completed: [0]
+- Current Phase: 2 (Requirements)
+- Phases Completed: [0, 1]
 - Last Updated: 2026-01-16
 
 ## Phase Approvals
 | Phase | Status | Approved By | Date |
 |-------|--------|-------------|------|
 | 0 | Approved | @user | 2026-01-16 |
-| 1 | Pending | - | - |
+| 1 | Approved | @user | 2026-01-16 |
 | 2 | Pending | - | - |
 | 3 | Pending | - | - |
 | 4 | Pending | - | - |

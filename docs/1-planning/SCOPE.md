@@ -2,195 +2,367 @@
 
 ## Project Overview
 
-**claude-memory** is an MCP (Model Context Protocol) server that provides persistent intelligent memory for Claude Code sessions, enabling dramatic reductions in token usage and elimination of redundant file reads.
+**claude-memory** is a comprehensive MCP (Model Context Protocol) server providing persistent intelligent memory for Claude Code sessions. It combines proven patterns from existing solutions (mcp-memory-service, MemGPT/Letta, Mem0) with novel improvements in hybrid search, context engineering, and project isolation.
+
+**Timeline**: 24 weeks (comprehensive implementation)
 
 ## In Scope
 
-### Core Memory System
+### 1. MCP Server Core
 
-1. **Session Memory**
-   - Working memory for current task context
+1. **Protocol Implementation**
+   - Full MCP SDK integration (TypeScript)
+   - JSON-RPC 2.0 compliance
+   - stdio transport (Claude Code default)
+   - Tool and resource exposure
+   - Error handling per MCP spec
+
+2. **14 MCP Tools**
+   | Tool | Category | Description |
+   |------|----------|-------------|
+   | `memory_store` | Memory | Store fact/pattern/decision with auto-extraction |
+   | `memory_recall` | Memory | Hybrid search retrieval with citations |
+   | `memory_forget` | Memory | Soft-delete with provenance tracking |
+   | `memory_update` | Memory | Update existing memory with conflict resolution |
+   | `context_compact` | Context | Trigger summarization of current context |
+   | `context_status` | Context | Show token usage, memory stats, health |
+   | `session_save` | Session | Persist full session state |
+   | `session_restore` | Session | Load previous session |
+   | `session_list` | Session | List available sessions for project |
+   | `graph_query` | Graph | Query knowledge graph relationships |
+   | `graph_add` | Graph | Add entity/relation to graph |
+   | `graph_visualize` | Graph | Get graph data for visualization |
+   | `project_switch` | Project | Switch project context (isolation) |
+   | `project_list` | Project | List known projects |
+
+3. **MCP Resources**
+   - `memory://stats` - Memory statistics and health
+   - `memory://core` - Current core memory blocks
+   - `memory://graph` - Knowledge graph summary
+
+### 2. Memory System
+
+1. **Working Memory** (Session-scoped)
+   - Current task context buffer
+   - Recent tool calls cache (last 10)
    - Scratchpad for temporary computations
-   - Recent tool calls and results cache
-   - Automatic cleanup on session end
+   - Auto-cleared on session end
+   - Token budget: 20% of context
 
-2. **Archival Memory**
-   - Persistent fact storage with citations
-   - Architectural decisions (ADRs)
+2. **Core Memory** (MemGPT-style, self-editable)
+   - **Persona block**: Project identity from CLAUDE.md parsing
+   - **Human block**: User preferences, coding style
+   - **Goals block**: Current objectives, constraints
+   - **Project block**: Key files, patterns, architecture
+   - Claude can self-edit during sessions
+   - Token budget: 15% of context
+   - Persisted per project
+
+3. **Archival Memory** (Persistent, searchable)
+   - Facts with citations (source file + line number)
+   - Architectural decisions (ADR links)
    - Learned patterns (successful/failed approaches)
-   - Error resolutions and fixes
-   - Vector embeddings for semantic search
+   - Error resolutions (problem → solution)
+   - Confidence scores per memory
+   - Temporal metadata (created, accessed, validated)
 
-3. **Core Memory (MemGPT-style)**
-   - Project persona block (from CLAUDE.md)
-   - User preferences block (coding style, conventions)
-   - Current goals block (active task context)
-   - Editable by Claude during sessions
+4. **Memory Consolidation** (Dream-inspired)
+   - Decay scoring (older = lower relevance)
+   - Association discovery (link related memories)
+   - Compression (merge duplicates/similar)
+   - Archival (move cold to long-term)
+   - Cleanup (remove contradicted facts)
+   - Trigger: Session end or 100+ operations
 
-4. **Knowledge Graph**
-   - Code entities (files, functions, types, modules)
-   - Relationships (implements, depends_on, satisfies, calls)
-   - Temporal versioning (bi-temporal model)
-   - Requirement traceability (US-XXX → FR-XXX → Code)
-
-### Search & Retrieval
+### 3. Hybrid Search System
 
 1. **Vector Search**
    - Embedding-based semantic similarity
    - Cosine similarity scoring
-   - Configurable top-k retrieval
-   - Support for multiple embedding models
+   - Configurable top-k (default 10)
+   - Async batch embedding support
 
 2. **BM25 Keyword Search**
-   - Term frequency-based ranking
+   - SQLite FTS5 integration
+   - Term frequency ranking
    - Exact match capability
-   - Code identifier search (function names, types)
-   - Boolean query support
+   - Boolean query support (AND, OR, NOT)
 
-3. **Hybrid Search**
-   - Reciprocal Rank Fusion (RRF) combining
-   - Configurable vector/keyword weights
-   - Re-ranking based on recency and confidence
-   - Filtering by entity type, time range
+3. **Reciprocal Rank Fusion (RRF)**
+   - k=60 (empirically optimal)
+   - Combine vector + BM25 rankings
+   - Handle mismatched score scales
+   - Configurable weights (default 0.5/0.5)
 
-### Embeddings
+4. **Re-ranking**
+   - Recency boost (recent memories score higher)
+   - Confidence weighting
+   - Access frequency factor
+   - Project isolation filter
 
-1. **Local Embedding Providers**
-   - LM Studio integration (primary)
-   - Ollama integration (fallback)
-   - nomic-embed-text model (768 dimensions)
-   - Batch embedding support
+### 4. Embeddings System
 
-2. **Embedding Cache**
-   - SQLite-based persistence
+1. **Provider Abstraction**
+   - Primary: Ollama (nomic-embed-text-v2-moe)
+   - Fallback: LM Studio
+   - Future: OpenAI, Cohere (optional cloud)
+
+2. **nomic-embed-text-v2-moe Configuration**
+   - 768 dimensions (full) or 256 (Matryoshka compressed)
+   - 8192 token context length
+   - MoE architecture (305M active params)
+   - Multilingual support
+
+3. **Embedding Cache**
+   - SQLite BLOB storage
    - Content hash deduplication
-   - Automatic invalidation on content change
-   - Pre-warming for known files
+   - Automatic invalidation on change
+   - Pre-warming for CLAUDE.md, key files
 
-### Context Optimization
+4. **Graceful Degradation**
+   - BM25-only mode if no embedding server
+   - Clear error messages with setup instructions
+   - Retry queue for transient failures
 
-1. **Compression Pipeline**
-   - Deduplication of repeated content
-   - Summarization of large files
-   - Relevance filtering
-   - Smart expansion on demand
+### 5. Knowledge Graph
+
+1. **Entity Types**
+   - Files (path, type, size, hash)
+   - Functions (name, signature, location)
+   - Types (name, definition, usage)
+   - Decisions (description, rationale, date)
+   - Errors (description, solution, context)
+
+2. **Relationship Types**
+   - `implements` (function → interface)
+   - `depends_on` (file → file)
+   - `satisfies` (code → requirement)
+   - `calls` (function → function)
+   - `contradicts` (fact → fact)
+   - `supersedes` (decision → decision)
+
+3. **Temporal Model** (Bi-temporal)
+   - Event time: When fact was true
+   - Ingestion time: When we learned it
+   - Valid from/to for relationships
+   - Historical queries supported
+
+4. **Graph Operations**
+   - `find_connected`: Get related entities
+   - `shortest_path`: Find connection between entities
+   - `get_subgraph`: Extract relevant portion
+   - `add_entity`: Create new entity
+   - `add_relation`: Create new relationship
+
+### 6. Context Engineering
+
+1. **Auto-Compact**
+   - Trigger at 95% context window capacity
+   - Recursive summarization of history
+   - Extract key decisions/facts to archival
+   - Replace verbose content with summary
+   - Preserve essential context only
 
 2. **Token Budget Management**
-   - Category-based allocation
-   - Priority-based selection
-   - Overflow handling
+   - Category-based allocation:
+     - Core memory: 15%
+     - Working memory: 20%
+     - Retrieved archival: 25%
+     - Current task: 40%
+   - Overflow handling (priority-based eviction)
    - Usage tracking and reporting
 
-### MCP Integration
+3. **State Isolation**
+   - Structured runtime state schema
+   - Selective field exposure to LLM
+   - Project-specific boundaries
+   - Context tagging
 
-1. **MCP Tools**
-   - `memory_store`: Store facts, patterns, decisions
-   - `memory_recall`: Retrieve relevant context
-   - `memory_forget`: Remove outdated information
-   - `context_optimize`: Compress current context
-   - `session_save`: Persist session state
-   - `session_restore`: Load previous session
-   - `graph_query`: Query knowledge relationships
+4. **Masking & Filtering**
+   - Hide low-relevance retrieved content
+   - Filter by task stage
+   - Reduce noise, improve precision
+   - Configurable thresholds
 
-2. **MCP Resources**
-   - Memory statistics
-   - Token usage metrics
-   - Knowledge graph visualization data
+### 7. Project Isolation
 
-### Storage
+1. **Project Identification**
+   - SHA256 hash of git root or CLAUDE.md path
+   - Fallback to directory name
+   - Manual override via tool
+
+2. **Separate Databases**
+   - Location: `~/.claude-memory/<project-hash>/memory.db`
+   - Complete isolation per project
+   - No cross-project data access
+
+3. **Context Validation**
+   - Every memory tagged with project ID
+   - Cross-project retrieval blocked
+   - Warning on ambiguous content
+   - Audit logging
+
+4. **Project Management**
+   - `project_switch`: Change active project
+   - `project_list`: List known projects
+   - Project metadata (name, path, stats)
+
+### 8. Storage System
 
 1. **SQLite Database**
-   - Single-file persistence
-   - BLOB storage for embeddings
-   - Full-text search indexes
-   - Migration support
+   - Single file per project
+   - WAL mode for concurrency
+   - FTS5 for full-text search
+   - BLOB for embeddings
 
-2. **Data Model**
-   - Facts table (content, embedding, metadata)
-   - Entities table (type, name, properties)
-   - Relations table (source, target, type, temporal)
-   - Sessions table (state, timestamp)
+2. **Schema**
+   ```sql
+   -- Core tables
+   memories (id, content, embedding, metadata, created, accessed)
+   core_memory (block, content, updated)
+   sessions (id, state, created, resumed)
 
-### Configuration
+   -- Knowledge graph
+   entities (id, type, name, properties, valid_from, valid_to)
+   relations (source, target, type, properties, valid_from, valid_to)
 
-1. **Settings**
-   - Embedding provider selection
-   - Token budget limits
-   - Search parameters
-   - Storage location
+   -- Consolidation
+   consolidation_log (id, action, details, timestamp)
 
-2. **Project Integration**
-   - CLAUDE.md parsing
-   - .gitignore awareness
-   - Project root detection
+   -- Full-text search
+   memories_fts (content) -- FTS5 virtual table
+   ```
+
+3. **Migrations**
+   - Versioned schema changes
+   - Automatic upgrade on start
+   - Rollback capability
+   - Data preservation
+
+### 9. Configuration
+
+1. **Settings File** (`~/.claude-memory/config.json`)
+   ```json
+   {
+     "embedding": {
+       "provider": "ollama",
+       "model": "nomic-embed-text:v2",
+       "dimensions": 256,
+       "endpoint": "http://localhost:11434"
+     },
+     "search": {
+       "vectorWeight": 0.5,
+       "bm25Weight": 0.5,
+       "rrfK": 60,
+       "topK": 10
+     },
+     "context": {
+       "autoCompactThreshold": 0.95,
+       "coreBudget": 0.15,
+       "workingBudget": 0.20,
+       "archivalBudget": 0.25
+     },
+     "consolidation": {
+       "decayRate": 0.1,
+       "triggerThreshold": 100
+     }
+   }
+   ```
+
+2. **Environment Variables**
+   - `CLAUDE_MEMORY_PATH`: Storage location
+   - `CLAUDE_MEMORY_EMBEDDING_URL`: Embedding endpoint
+   - `CLAUDE_MEMORY_DEBUG`: Enable debug logging
+
+3. **Project Overrides**
+   - `.claude-memory.json` in project root
+   - Overrides global settings
+   - Project-specific configuration
+
+### 10. Documentation & Testing
+
+1. **Documentation**
+   - README with quick start
+   - Installation guide
+   - Configuration reference
+   - API documentation (all tools)
+   - Architecture overview
+   - Troubleshooting guide
+
+2. **Testing**
+   - Unit tests (>80% coverage)
+   - Integration tests (MCP protocol)
+   - Benchmark suite (LoCoMo-style)
+   - Performance tests (latency, throughput)
+
+3. **Benchmarking**
+   - Memory operation accuracy test
+   - Token reduction measurement
+   - Project isolation validation
+   - Search quality evaluation
 
 ## Out of Scope
 
 ### Version 1.0
 
 1. **Cloud Services**
-   - Cloud-hosted memory service
-   - Remote embedding APIs (OpenAI, Cohere)
+   - Cloud-hosted memory
    - Sync between devices
    - Team/shared memory
+   - Cloud embedding APIs (OpenAI, Cohere)
 
 2. **Multi-User**
-   - User authentication
-   - Permission management
+   - Authentication/authorization
+   - User management
    - Shared knowledge bases
    - Collaboration features
 
 3. **IDE Integrations**
    - VS Code extension
    - JetBrains plugin
-   - Vim/Neovim plugin
    - Direct IDE integration (beyond MCP)
 
 4. **Advanced AI**
    - Fine-tuning on project data
-   - Custom model training
    - Autonomous memory curation
    - Predictive pre-fetching
+   - Natural language graph queries
 
-5. **Complex Queries**
-   - Natural language to graph query
-   - Multi-hop reasoning
-   - Inference over knowledge graph
-   - Automated fact verification
-
-6. **External Integrations**
+5. **External Integrations**
    - GitHub/GitLab integration
    - Jira/Linear integration
    - Documentation site indexing
-   - API documentation parsing
 
-### Future Versions (Post 1.0)
+### Future Versions
 
-1. **Cloud Option** (v1.1)
+1. **v1.1: Cloud Optional**
    - Optional cloud embedding fallback
-   - Cloud sync for cross-device
+   - Cross-device sync
+   - Backup/restore to cloud
 
-2. **Team Features** (v2.0)
+2. **v2.0: Team Features**
    - Shared project memory
    - Team knowledge base
    - Access controls
+   - Admin dashboard
 
-3. **IDE Extensions** (v2.0)
+3. **v2.1: IDE Extensions**
    - VS Code sidebar
    - Memory visualization
+   - Real-time stats
 
 ## Success Criteria
 
-### Quantitative
+### Quantitative (Must Achieve)
 
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| Token reduction | ≥80% | Before/after comparison |
-| File re-reads | ≤20% of baseline | Tool call analysis |
-| Search latency | <100ms | Performance benchmark |
-| Embedding latency | <200ms | Performance benchmark |
-| Storage overhead | <100MB/project | Disk usage |
-| Memory accuracy | ≥95% | Citation verification |
+| Metric | Industry Best | Target | Method |
+|--------|---------------|--------|--------|
+| Memory accuracy | 53% | **70%+** | LoCoMo benchmark |
+| Token reduction | 88% | **80%+** | Before/after test |
+| Project isolation | "occasional" errors | **<5%** | Cross-project test |
+| Search latency | 5ms | **<50ms** | Performance test |
+| Embedding latency | - | **<200ms** | Performance test |
+| Session restore | - | **<1s** | Cold start test |
 
 ### Qualitative
 
@@ -201,64 +373,56 @@
    - Comprehensive documentation
 
 2. **Reliability**
-   - No data loss on crash
+   - No data loss on crash (WAL mode)
    - Graceful degradation without embedding server
-   - Consistent behavior across sessions
+   - Consistent cross-session behavior
 
-3. **Integration**
-   - Seamless Claude Code experience
-   - No workflow disruption
-   - Transparent operation
-
-## Assumptions
-
-1. **User Environment**
-   - Node.js 18+ installed
-   - SQLite available (bundled)
-   - Local embedding server optional but recommended
-   - Sufficient disk space (100MB-1GB)
-
-2. **Claude Code**
-   - MCP support stable and documented
-   - Tool interface remains consistent
-   - Resource interface available
-
-3. **Embedding Providers**
-   - LM Studio or Ollama accessible locally
-   - nomic-embed-text model available
-   - Reasonable embedding latency (<500ms)
+3. **Performance**
+   - Memory usage <512MB
+   - Storage <100MB per project
+   - Responsive under load
 
 ## Dependencies
 
-### Runtime
+### Runtime (Required)
 
-| Dependency | Purpose | Version |
-|------------|---------|---------|
-| Node.js | Runtime | ≥18.0 |
-| @modelcontextprotocol/sdk | MCP integration | Latest |
-| better-sqlite3 | Database | Latest |
-| natural | BM25 search | Latest |
+| Package | Purpose | Version |
+|---------|---------|---------|
+| `@modelcontextprotocol/sdk` | MCP integration | Latest |
+| `better-sqlite3` | Database | Latest |
+| `natural` | BM25/NLP | Latest |
+
+### Runtime (Optional)
+
+| Package | Purpose | Fallback |
+|---------|---------|----------|
+| Ollama | Embeddings | LM Studio |
+| LM Studio | Embeddings | BM25-only mode |
 
 ### Development
 
-| Dependency | Purpose | Version |
-|------------|---------|---------|
-| TypeScript | Language | ≥5.0 |
-| Vitest | Testing | Latest |
-| ESLint | Linting | Latest |
-| Prettier | Formatting | Latest |
+| Package | Purpose |
+|---------|---------|
+| TypeScript 5+ | Language |
+| Vitest | Testing |
+| ESLint + Prettier | Code quality |
+| tsx | Development runner |
 
-### Optional
+## Milestones
 
-| Dependency | Purpose | Fallback |
-|------------|---------|----------|
-| LM Studio | Embeddings | Ollama |
-| Ollama | Embeddings | Disabled |
-
-## Constraints Reference
-
-See [CONSTRAINTS.md](./CONSTRAINTS.md) for detailed technical and business constraints.
+| Phase | Weeks | Deliverables |
+|-------|-------|--------------|
+| 1. Foundation | 1-4 | MCP server, SQLite, Ollama, basic tools |
+| 2. Hybrid Search | 5-8 | Vector, BM25, RRF, benchmarks |
+| 3. Memory System | 9-12 | Core/archival memory, sessions, consolidation |
+| 4. Knowledge Graph | 13-16 | Entities, relations, temporal, graph tools |
+| 5. Context Engineering | 17-20 | Auto-compact, budgets, isolation |
+| 6. Polish | 21-24 | Optimization, benchmarks, docs, release |
 
 ## Risks Reference
 
-See [RISKS.md](./RISKS.md) for identified risks and mitigation strategies.
+See [RISKS.md](./RISKS.md) for comprehensive risk analysis.
+
+## Constraints Reference
+
+See [CONSTRAINTS.md](./CONSTRAINTS.md) for technical and business constraints.
