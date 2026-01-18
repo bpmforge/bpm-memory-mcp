@@ -1,5 +1,5 @@
 import type { DatabaseConnection } from '../storage/database.js';
-import type { Memory, MemorySearchResult, MemoryType } from '../types.js';
+import type { Memory, MemorySearchResult, MemoryType, Language } from '../types.js';
 
 /**
  * BM25 search using SQLite FTS5
@@ -17,6 +17,10 @@ export class BM25Search {
       limit?: number;
       type?: MemoryType;
       minConfidence?: number;
+      // V2 filters
+      language?: Language;
+      includeStale?: boolean;
+      includeSuperseded?: boolean;
     } = {}
   ): MemorySearchResult[] {
     const limit = options.limit ?? 10;
@@ -37,6 +41,16 @@ export class BM25Search {
 
     const params: unknown[] = [ftsQuery, projectId];
 
+    // V2: Exclude superseded by default
+    if (!options.includeSuperseded) {
+      sql += ' AND m.superseded_by IS NULL';
+    }
+
+    // V2: Exclude stale by default
+    if (!options.includeStale) {
+      sql += ' AND m.flagged_at IS NULL';
+    }
+
     if (options.type) {
       sql += ' AND m.type = ?';
       params.push(options.type);
@@ -45,6 +59,12 @@ export class BM25Search {
     if (options.minConfidence !== undefined) {
       sql += ' AND m.confidence >= ?';
       params.push(options.minConfidence);
+    }
+
+    // V2: Language filter
+    if (options.language) {
+      sql += ' AND m.language = ?';
+      params.push(options.language);
     }
 
     sql += ' ORDER BY bm25_score LIMIT ?';

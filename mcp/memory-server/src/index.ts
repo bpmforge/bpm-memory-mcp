@@ -20,9 +20,12 @@ import {
   MemoryRecallInputSchema,
   MemoryForgetInputSchema,
   MemoryUpdateInputSchema,
+  MemoryFeedbackInputSchema,
   SessionSaveInputSchema,
+  FeedbackType,
   type MemoryCreateInput,
   type SearchOptions,
+  type CodeContext,
 } from './types.js';
 
 // Current project context
@@ -98,6 +101,23 @@ function createServer(): Server {
             },
             confidence: { type: 'number', minimum: 0, maximum: 1, description: 'Confidence score' },
             citation: { type: 'string', description: 'Source reference (file:line)' },
+            // V2 fields
+            language: {
+              type: 'string',
+              enum: ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'c', 'cpp', 'ruby', 'php', 'shell', 'sql', 'markdown', 'json', 'yaml', 'other'],
+              description: 'Programming language (auto-detected from citation if not provided)',
+            },
+            codeContext: {
+              type: 'object',
+              properties: {
+                filePath: { type: 'string', description: 'Relative file path' },
+                startLine: { type: 'integer', minimum: 1, description: 'Starting line number' },
+                endLine: { type: 'integer', minimum: 1, description: 'Ending line number' },
+                symbolName: { type: 'string', description: 'Function/class/variable name' },
+                symbolType: { type: 'string', enum: ['function', 'class', 'variable', 'type', 'module', 'method'] },
+              },
+              description: 'Structured code context (auto-parsed from citation if not provided)',
+            },
           },
           required: ['content'],
         },
@@ -116,6 +136,14 @@ function createServer(): Server {
             },
             limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max results' },
             minConfidence: { type: 'number', minimum: 0, maximum: 1, description: 'Min confidence' },
+            // V2 filters
+            language: {
+              type: 'string',
+              enum: ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'c', 'cpp', 'ruby', 'php', 'shell', 'sql', 'markdown', 'json', 'yaml', 'other'],
+              description: 'Filter by programming language',
+            },
+            includeStale: { type: 'boolean', description: 'Include flagged-stale memories (default: false)' },
+            includeSuperseded: { type: 'boolean', description: 'Include superseded versions (default: false)' },
           },
           required: ['query'],
         },
@@ -134,14 +162,38 @@ function createServer(): Server {
       },
       {
         name: 'memory_update',
-        description: 'Update memory content and re-embed (atomic operation)',
+        description: 'Create a new version of a memory (supersedes the old version)',
         inputSchema: {
           type: 'object',
           properties: {
             id: { type: 'string', format: 'uuid', description: 'Memory ID to update' },
             content: { type: 'string', description: 'New content' },
+            // V2 optional updates
+            language: {
+              type: 'string',
+              enum: ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'c', 'cpp', 'ruby', 'php', 'shell', 'sql', 'markdown', 'json', 'yaml', 'other'],
+              description: 'Update programming language',
+            },
           },
           required: ['id', 'content'],
+        },
+      },
+      {
+        name: 'memory_feedback',
+        description: 'Provide feedback on a recalled memory to improve future results',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid', description: 'Memory ID to provide feedback on' },
+            feedback: {
+              type: 'string',
+              enum: ['helpful', 'wrong', 'outdated', 'duplicate'],
+              description: 'Type of feedback',
+            },
+            correction: { type: 'string', description: 'Corrected content (for wrong/outdated)' },
+            duplicateOf: { type: 'string', format: 'uuid', description: 'Canonical memory ID (for duplicate)' },
+          },
+          required: ['id', 'feedback'],
         },
       },
       {
@@ -203,6 +255,19 @@ function createServer(): Server {
             projectId,
           };
           if (input.citation) memoryInput.citation = input.citation;
+          // V2 fields (language and codeContext auto-detected in repository if not provided)
+          if (input.language) memoryInput.language = input.language;
+          if (input.codeContext) {
+            // Build CodeContext without undefined values for exactOptionalPropertyTypes
+            const ctx: CodeContext = {
+              filePath: input.codeContext.filePath,
+              startLine: input.codeContext.startLine,
+            };
+            if (input.codeContext.endLine !== undefined) ctx.endLine = input.codeContext.endLine;
+            if (input.codeContext.symbolName !== undefined) ctx.symbolName = input.codeContext.symbolName;
+            if (input.codeContext.symbolType !== undefined) ctx.symbolType = input.codeContext.symbolType;
+            memoryInput.codeContext = ctx;
+          }
 
           const memory = memoryRepository.createMemory(memoryInput, embedding);
 
@@ -215,6 +280,9 @@ function createServer(): Server {
                   type: memory.type,
                   confidence: memory.confidence,
                   hasEmbedding: !!memory.embedding,
+                  // V2 response fields
+                  language: memory.language,
+                  version: memory.version,
                 }),
               },
             ],
@@ -229,8 +297,12 @@ function createServer(): Server {
             projectId,
             limit: input.limit,
             minConfidence: input.minConfidence,
+            // V2 filters
+            includeStale: input.includeStale,
+            includeSuperseded: input.includeSuperseded,
           };
           if (input.type) searchOptions.type = input.type;
+          if (input.language) searchOptions.language = input.language;
 
           const response = await hybridSearch.search(input.query, searchOptions);
 
@@ -251,6 +323,11 @@ function createServer(): Server {
                     confidence: r.memory.confidence,
                     citation: r.memory.citation,
                     relevance: r.relevance,
+                    // V2 response fields
+                    language: r.memory.language,
+                    version: r.memory.version,
+                    isSuperseded: !!r.memory.supersededBy,
+                    isStale: !!r.memory.flaggedAt,
                   })),
                   stats: response.searchStats,
                 }),
@@ -278,20 +355,79 @@ function createServer(): Server {
         case 'memory_update': {
           const input = MemoryUpdateInputSchema.parse(args);
           const embedding = await embeddingService.embed(input.content);
-          const success = memoryRepository.updateContent(
+
+          // V2: Create superseding memory instead of in-place update
+          try {
+            const newMemory = memoryRepository.createSupersedingMemory(
+              input.id,
+              projectId,
+              input.content,
+              embedding
+            );
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    id: newMemory.id,
+                    version: newMemory.version,
+                    supersedesId: newMemory.supersedesId,
+                    message: `Memory updated to version ${newMemory.version}`,
+                  }),
+                },
+              ],
+            };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Memory ${input.id} not found`,
+                },
+              ],
+            };
+          }
+        }
+
+        case 'memory_feedback': {
+          const input = MemoryFeedbackInputSchema.parse(args);
+
+          // Record feedback and adjust confidence
+          const feedback = memoryRepository.recordFeedback(
             input.id,
             projectId,
-            input.content,
-            embedding
+            input.feedback as FeedbackType,
+            input.correction,
+            input.duplicateOf
           );
+
+          // If correction provided for wrong/outdated, create superseding memory
+          let newMemoryId: string | null = null;
+          if (input.correction && (input.feedback === 'wrong' || input.feedback === 'outdated')) {
+            const embedding = await embeddingService.embed(input.correction);
+            const newMemory = memoryRepository.createSupersedingMemory(
+              input.id,
+              projectId,
+              input.correction,
+              embedding
+            );
+            newMemoryId = newMemory.id;
+          }
 
           return {
             content: [
               {
                 type: 'text',
-                text: success
-                  ? `Memory ${input.id} updated`
-                  : `Memory ${input.id} not found`,
+                text: JSON.stringify({
+                  feedbackId: feedback.id,
+                  feedbackType: feedback.feedbackType,
+                  confidenceDelta: feedback.confidenceDelta,
+                  newMemoryId,
+                  message: newMemoryId
+                    ? `Feedback recorded. New corrected memory created: ${newMemoryId}`
+                    : `Feedback recorded. Confidence adjusted by ${feedback.confidenceDelta}`,
+                }),
               },
             ],
           };

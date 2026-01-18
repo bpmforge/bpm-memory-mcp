@@ -105,6 +105,16 @@ export class HybridSearch {
     `;
     const params: unknown[] = [options.projectId];
 
+    // V2: Exclude superseded by default
+    if (!options.includeSuperseded) {
+      sql += ' AND superseded_by IS NULL';
+    }
+
+    // V2: Exclude stale by default
+    if (!options.includeStale) {
+      sql += ' AND flagged_at IS NULL';
+    }
+
     if (options.type) {
       sql += ' AND type = ?';
       params.push(options.type);
@@ -112,6 +122,12 @@ export class HybridSearch {
     if (options.minConfidence !== undefined) {
       sql += ' AND confidence >= ?';
       params.push(options.minConfidence);
+    }
+
+    // V2: Language filter
+    if (options.language) {
+      sql += ' AND language = ?';
+      params.push(options.language);
     }
 
     const rows = this.db.instance.prepare(sql).all(...params) as MemoryRow[];
