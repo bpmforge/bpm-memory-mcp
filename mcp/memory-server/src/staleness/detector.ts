@@ -1,7 +1,8 @@
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { createHash } from 'crypto';
 import type { DatabaseConnection } from '../storage/database.js';
-import type { Memory, MemoryType } from '../types.js';
+import type { Memory, MemoryType, CodeContext } from '../types.js';
 import { parseCodeContext } from '../language/context.js';
 
 /**
@@ -128,6 +129,51 @@ export class StalenessDetector {
       .all(projectId, threshold) as MemoryRow[];
 
     return rows.map((row) => this.rowToMemory(row));
+  }
+
+  /**
+   * Detect memories whose source file content has changed
+   * Compares stored sourceHash with current file hash
+   */
+  detectContentChanged(projectId: string, projectRoot: string): Memory[] {
+    // Get memories with code context that have source hashes
+    const rows = this.db.instance
+      .prepare(
+        `SELECT * FROM memories
+         WHERE project_id = ?
+           AND code_context IS NOT NULL
+           AND deleted_at IS NULL
+           AND flagged_at IS NULL
+           AND superseded_by IS NULL`
+      )
+      .all(projectId) as MemoryRow[];
+
+    return rows
+      .filter((row) => {
+        if (!row.code_context) return false;
+
+        const codeContext: CodeContext = JSON.parse(row.code_context);
+        if (!codeContext.sourceHash) return false;
+
+        const fullPath = resolve(projectRoot, codeContext.filePath);
+        if (!existsSync(fullPath)) return false; // Missing files handled separately
+
+        try {
+          const currentHash = this.computeFileHash(fullPath);
+          return currentHash !== codeContext.sourceHash;
+        } catch {
+          return false; // Unable to read file
+        }
+      })
+      .map((row) => this.rowToMemory(row));
+  }
+
+  /**
+   * Compute SHA-256 hash of file content
+   */
+  computeFileHash(filePath: string): string {
+    const content = readFileSync(filePath, 'utf-8');
+    return createHash('sha256').update(content).digest('hex');
   }
 
   /**

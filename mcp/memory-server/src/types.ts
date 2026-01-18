@@ -74,6 +74,7 @@ export interface CodeContext {
   endLine?: number;
   symbolName?: string;
   symbolType?: SymbolType;
+  sourceHash?: string; // Hash of file content at citation time (for staleness detection)
 }
 
 export interface Memory {
@@ -284,6 +285,7 @@ export const CodeContextSchema = z.object({
   endLine: z.number().int().min(1).optional(),
   symbolName: z.string().optional(),
   symbolType: SymbolTypeSchema.optional(),
+  sourceHash: z.string().optional(),
 });
 
 export const MemoryStoreInputSchema = z.object({

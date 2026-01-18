@@ -8,6 +8,7 @@ export interface StalenessReport {
   projectId: string;
   timestamp: Date;
   sourceMissing: Memory[];
+  contentChanged: Memory[];
   accessStale: Memory[];
   lowConfidence: Memory[];
   totalFlaggable: number;
@@ -30,6 +31,7 @@ export class StalenessReportGenerator {
       confidenceThreshold?: number;
       includeAccessStale?: boolean;
       includeSourceMissing?: boolean;
+      includeContentChanged?: boolean;
       includeLowConfidence?: boolean;
     } = {}
   ): StalenessReport {
@@ -38,11 +40,16 @@ export class StalenessReportGenerator {
       confidenceThreshold = 0.5,
       includeAccessStale = true,
       includeSourceMissing = true,
+      includeContentChanged = true,
       includeLowConfidence = true,
     } = options;
 
     const sourceMissing = includeSourceMissing
       ? this.detector.detectSourceMissing(projectId, projectRoot)
+      : [];
+
+    const contentChanged = includeContentChanged
+      ? this.detector.detectContentChanged(projectId, projectRoot)
       : [];
 
     const accessStale = includeAccessStale
@@ -57,9 +64,11 @@ export class StalenessReportGenerator {
       projectId,
       timestamp: new Date(),
       sourceMissing,
+      contentChanged,
       accessStale,
       lowConfidence,
-      totalFlaggable: sourceMissing.length + accessStale.length + lowConfidence.length,
+      totalFlaggable:
+        sourceMissing.length + contentChanged.length + accessStale.length + lowConfidence.length,
     };
   }
 
@@ -88,6 +97,21 @@ export class StalenessReportGenerator {
       }
       if (report.sourceMissing.length > 10) {
         lines.push(`  ... and ${report.sourceMissing.length - 10} more`);
+      }
+      lines.push('');
+    }
+
+    if (report.contentChanged.length > 0) {
+      lines.push(`Source Changed (${report.contentChanged.length}):`);
+      for (const m of report.contentChanged.slice(0, 10)) {
+        const contentPreview = m.content.slice(0, 40).replace(/\n/g, ' ');
+        lines.push(`  - "${contentPreview}..." - file modified`);
+        if (m.citation) {
+          lines.push(`    Citation: ${m.citation}`);
+        }
+      }
+      if (report.contentChanged.length > 10) {
+        lines.push(`  ... and ${report.contentChanged.length - 10} more`);
       }
       lines.push('');
     }
@@ -132,14 +156,27 @@ export class StalenessReportGenerator {
    */
   autoFlag(
     report: StalenessReport,
-    options: { flagSourceMissing?: boolean; flagAccessStale?: boolean } = {}
+    options: {
+      flagSourceMissing?: boolean;
+      flagContentChanged?: boolean;
+      flagAccessStale?: boolean;
+    } = {}
   ): number {
-    const { flagSourceMissing = true, flagAccessStale = false } = options;
+    const { flagSourceMissing = true, flagContentChanged = true, flagAccessStale = false } =
+      options;
     let flagged = 0;
 
     if (flagSourceMissing) {
       for (const m of report.sourceMissing) {
         if (this.detector.flagAsStale(m.id, report.projectId, 'Source file no longer exists')) {
+          flagged++;
+        }
+      }
+    }
+
+    if (flagContentChanged) {
+      for (const m of report.contentChanged) {
+        if (this.detector.flagAsStale(m.id, report.projectId, 'Source file content changed')) {
           flagged++;
         }
       }
