@@ -6,9 +6,21 @@
 |-------|-------|
 | Version | 2.0 |
 | Date | 2026-01-18 |
-| Status | Draft |
+| Status | **IMPLEMENTED** |
 | Extends | DATABASE.md v1.0 |
-| Migration | V1 → V2 |
+| Migration | V1 → V6 |
+
+## Migration Status
+
+| Version | Description | Status |
+|---------|-------------|--------|
+| V2 | Language + code_context columns | **Applied** |
+| V3 | Versioning columns | **Applied** |
+| V4 | memory_feedback table | **Applied** |
+| V5 | Staleness columns | **Applied** |
+| V6 | Language backfill | **Applied** |
+
+All migrations defined in `mcp/memory-server/src/storage/schema.ts`.
 
 ## Overview
 

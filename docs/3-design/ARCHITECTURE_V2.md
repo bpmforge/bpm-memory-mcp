@@ -6,9 +6,21 @@
 |-------|-------|
 | Version | 2.0 |
 | Date | 2026-01-18 |
-| Status | Draft |
+| Status | **IMPLEMENTED** |
 | Extends | ARCHITECTURE.md v1.0 |
 | Purpose | Address gaps identified in GAPS.md |
+
+## Implementation Status
+
+All architectural components described in this document have been implemented:
+
+| Component | Files | Status |
+|-----------|-------|--------|
+| Language Detection | `src/language/detector.ts` | **Done** |
+| Code Context Parsing | `src/language/context.ts` | **Done** |
+| Memory Versioning | `src/storage/repository.ts` | **Done** |
+| Feedback System | `src/storage/repository.ts`, `src/index.ts` | **Done** |
+| Staleness Detection | `src/staleness/detector.ts`, `report.ts` | **Done** |
 
 ## Overview
 
