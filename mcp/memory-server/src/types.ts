@@ -29,9 +29,52 @@ export enum RelationType {
   SUPERSEDES = 'supersedes',
 }
 
+export enum FeedbackType {
+  HELPFUL = 'helpful',
+  WRONG = 'wrong',
+  OUTDATED = 'outdated',
+  DUPLICATE = 'duplicate',
+}
+
+export enum SymbolType {
+  FUNCTION = 'function',
+  CLASS = 'class',
+  VARIABLE = 'variable',
+  TYPE = 'type',
+  MODULE = 'module',
+  METHOD = 'method',
+}
+
+// Supported programming languages
+export type Language =
+  | 'typescript'
+  | 'javascript'
+  | 'python'
+  | 'rust'
+  | 'go'
+  | 'java'
+  | 'c'
+  | 'cpp'
+  | 'ruby'
+  | 'php'
+  | 'shell'
+  | 'sql'
+  | 'markdown'
+  | 'json'
+  | 'yaml'
+  | 'other';
+
 // ============================================================================
 // Core Interfaces
 // ============================================================================
+
+export interface CodeContext {
+  filePath: string;
+  startLine: number;
+  endLine?: number;
+  symbolName?: string;
+  symbolType?: SymbolType;
+}
 
 export interface Memory {
   id: string;
@@ -47,6 +90,26 @@ export interface Memory {
   accessCount: number;
   deletedAt: Date | null;
   deleteReason: string | null;
+  // V2 fields
+  language: Language | null;
+  codeContext: CodeContext | null;
+  version: number;
+  supersedesId: string | null;
+  supersededBy: string | null;
+  supersededAt: Date | null;
+  flaggedAt: Date | null;
+  flaggedReason: string | null;
+  embeddingModel: string | null;
+}
+
+export interface MemoryFeedback {
+  id: string;
+  memoryId: string;
+  feedbackType: FeedbackType;
+  correction: string | null;
+  duplicateOf: string | null;
+  confidenceDelta: number;
+  createdAt: Date;
 }
 
 export interface MemoryCreateInput {
@@ -55,6 +118,10 @@ export interface MemoryCreateInput {
   confidence?: number;
   citation?: string;
   projectId: string;
+  // V2 fields
+  language?: Language;
+  codeContext?: CodeContext;
+  supersedesId?: string;
 }
 
 export interface MemorySearchResult {
@@ -80,6 +147,10 @@ export interface SearchOptions {
   limit?: number;
   minConfidence?: number;
   includeDeleted?: boolean;
+  // V2 filters
+  language?: Language;
+  includeStale?: boolean;
+  includeSuperseded?: boolean;
 }
 
 // ============================================================================
@@ -198,12 +269,31 @@ export interface SearchConfig {
 // ============================================================================
 
 export const MemoryTypeSchema = z.nativeEnum(MemoryType);
+export const FeedbackTypeSchema = z.nativeEnum(FeedbackType);
+export const SymbolTypeSchema = z.nativeEnum(SymbolType);
+
+export const LanguageSchema = z.enum([
+  'typescript', 'javascript', 'python', 'rust', 'go', 'java',
+  'c', 'cpp', 'ruby', 'php', 'shell', 'sql',
+  'markdown', 'json', 'yaml', 'other',
+]);
+
+export const CodeContextSchema = z.object({
+  filePath: z.string(),
+  startLine: z.number().int().min(1),
+  endLine: z.number().int().min(1).optional(),
+  symbolName: z.string().optional(),
+  symbolType: SymbolTypeSchema.optional(),
+});
 
 export const MemoryStoreInputSchema = z.object({
   content: z.string().min(1).max(50000),
   type: MemoryTypeSchema.optional().default(MemoryType.FACT),
   confidence: z.number().min(0).max(1).optional().default(1.0),
   citation: z.string().optional(),
+  // V2 fields
+  language: LanguageSchema.optional(),
+  codeContext: CodeContextSchema.optional(),
 });
 
 export const MemoryRecallInputSchema = z.object({
@@ -211,6 +301,10 @@ export const MemoryRecallInputSchema = z.object({
   type: MemoryTypeSchema.optional(),
   limit: z.number().int().min(1).max(50).optional().default(10),
   minConfidence: z.number().min(0).max(1).optional().default(0),
+  // V2 filters
+  language: LanguageSchema.optional(),
+  includeStale: z.boolean().optional().default(false),
+  includeSuperseded: z.boolean().optional().default(false),
 });
 
 export const MemoryForgetInputSchema = z.object({
@@ -221,6 +315,16 @@ export const MemoryForgetInputSchema = z.object({
 export const MemoryUpdateInputSchema = z.object({
   id: z.string().uuid(),
   content: z.string().min(1).max(50000),
+  // V2 optional updates
+  language: LanguageSchema.optional(),
+  codeContext: CodeContextSchema.optional(),
+});
+
+export const MemoryFeedbackInputSchema = z.object({
+  id: z.string().uuid(),
+  feedback: FeedbackTypeSchema,
+  correction: z.string().max(50000).optional(),
+  duplicateOf: z.string().uuid().optional(),
 });
 
 export const SessionSaveInputSchema = z.object({
@@ -239,5 +343,6 @@ export type MemoryStoreInput = z.infer<typeof MemoryStoreInputSchema>;
 export type MemoryRecallInput = z.infer<typeof MemoryRecallInputSchema>;
 export type MemoryForgetInput = z.infer<typeof MemoryForgetInputSchema>;
 export type MemoryUpdateInput = z.infer<typeof MemoryUpdateInputSchema>;
+export type MemoryFeedbackInput = z.infer<typeof MemoryFeedbackInputSchema>;
 export type SessionSaveInput = z.infer<typeof SessionSaveInputSchema>;
 export type GraphQueryInput = z.infer<typeof GraphQueryInputSchema>;

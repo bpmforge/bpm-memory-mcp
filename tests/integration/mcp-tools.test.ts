@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll, vi, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { SCHEMA_V1 } from '../../mcp/memory-server/src/storage/schema.js';
+import { MIGRATIONS } from '../../mcp/memory-server/src/storage/schema.js';
 import { MemoryRepository } from '../../mcp/memory-server/src/storage/repository.js';
 import { VectorSearch } from '../../mcp/memory-server/src/search/vector.js';
 import { BM25Search } from '../../mcp/memory-server/src/search/bm25.js';
 import { rrfFusion } from '../../mcp/memory-server/src/search/rrf.js';
 import type { Memory, MemorySearchResult } from '../../mcp/memory-server/src/types.js';
 
-// Mock database connection wrapper
+// Mock database connection wrapper with all migrations applied
 function createTestDb(): { instance: Database.Database; close: () => void } {
   const db = new Database(':memory:');
-  db.exec(SCHEMA_V1);
+  // Apply all migrations in order
+  for (const migration of MIGRATIONS) {
+    db.exec(migration.up);
+  }
   return {
     instance: db,
     close: () => db.close(),

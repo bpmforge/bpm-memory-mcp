@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 1;
+export const CURRENT_VERSION = 5;
 
 /**
  * Initial schema - Version 1
@@ -150,6 +150,76 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
       DROP TABLE IF EXISTS core_memory;
       DROP TABLE IF EXISTS memories;
       DROP TABLE IF EXISTS schema_version;
+    `,
+  },
+  // V2: Source Code Knowledge - Language field
+  {
+    version: 2,
+    up: `
+      ALTER TABLE memories ADD COLUMN language TEXT;
+      ALTER TABLE memories ADD COLUMN code_context TEXT;
+      CREATE INDEX idx_memories_language ON memories(project_id, language);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_language;
+      -- Note: SQLite doesn't support DROP COLUMN directly
+      -- Columns remain but are unused after rollback
+    `,
+  },
+  // V3: Memory Versioning
+  {
+    version: 3,
+    up: `
+      ALTER TABLE memories ADD COLUMN version INTEGER DEFAULT 1;
+      ALTER TABLE memories ADD COLUMN supersedes_id TEXT REFERENCES memories(id);
+      ALTER TABLE memories ADD COLUMN superseded_by TEXT;
+      ALTER TABLE memories ADD COLUMN superseded_at INTEGER;
+      CREATE INDEX idx_memories_supersedes ON memories(supersedes_id);
+      CREATE INDEX idx_memories_version ON memories(project_id, version);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_version;
+      DROP INDEX IF EXISTS idx_memories_supersedes;
+      -- Note: SQLite doesn't support DROP COLUMN directly
+    `,
+  },
+  // V4: Feedback System
+  {
+    version: 4,
+    up: `
+      CREATE TABLE IF NOT EXISTS memory_feedback (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL REFERENCES memories(id),
+        feedback_type TEXT NOT NULL CHECK (
+          feedback_type IN ('helpful', 'wrong', 'outdated', 'duplicate')
+        ),
+        correction TEXT,
+        duplicate_of TEXT REFERENCES memories(id),
+        confidence_delta REAL NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_feedback_memory ON memory_feedback(memory_id);
+      CREATE INDEX idx_feedback_type ON memory_feedback(feedback_type);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_feedback_type;
+      DROP INDEX IF EXISTS idx_feedback_memory;
+      DROP TABLE IF EXISTS memory_feedback;
+    `,
+  },
+  // V5: Staleness Detection
+  {
+    version: 5,
+    up: `
+      ALTER TABLE memories ADD COLUMN flagged_at INTEGER;
+      ALTER TABLE memories ADD COLUMN flagged_reason TEXT;
+      ALTER TABLE memories ADD COLUMN embedding_model TEXT;
+      ALTER TABLE sessions ADD COLUMN session_number INTEGER;
+      CREATE INDEX idx_memories_flagged ON memories(project_id, flagged_at);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_flagged;
+      -- Note: SQLite doesn't support DROP COLUMN directly
     `,
   },
 ];

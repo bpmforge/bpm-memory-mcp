@@ -1,13 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import { MemoryRepository } from '../../mcp/memory-server/src/storage/repository.js';
-import { SCHEMA_V1 } from '../../mcp/memory-server/src/storage/schema.js';
+import { MIGRATIONS } from '../../mcp/memory-server/src/storage/schema.js';
 import type { MemoryType } from '../../mcp/memory-server/src/types.js';
 
-// Create a mock DatabaseConnection interface
+// Create a mock DatabaseConnection interface with all migrations applied
 function createTestDb(): { instance: Database.Database; close: () => void } {
   const db = new Database(':memory:');
-  db.exec(SCHEMA_V1);
+  // Apply all migrations in order
+  for (const migration of MIGRATIONS) {
+    db.exec(migration.up);
+  }
   return {
     instance: db,
     close: () => db.close(),

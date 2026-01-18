@@ -152,6 +152,16 @@ export class HybridSearch {
       accessCount: row.access_count,
       deletedAt: row.deleted_at ? new Date(row.deleted_at * 1000) : null,
       deleteReason: row.deleted_reason,
+      // V2 fields
+      language: (row.language as Memory['language']) ?? null,
+      codeContext: row.code_context ? JSON.parse(row.code_context) : null,
+      version: row.version ?? 1,
+      supersedesId: row.supersedes_id ?? null,
+      supersededBy: row.superseded_by ?? null,
+      supersededAt: row.superseded_at ? new Date(row.superseded_at * 1000) : null,
+      flaggedAt: row.flagged_at ? new Date(row.flagged_at * 1000) : null,
+      flaggedReason: row.flagged_reason ?? null,
+      embeddingModel: row.embedding_model ?? null,
     };
   }
 }
@@ -170,4 +180,14 @@ interface MemoryRow {
   access_count: number;
   deleted_at: number | null;
   deleted_reason: string | null;
+  // V2 columns
+  language?: string | null;
+  code_context?: string | null;
+  version?: number | null;
+  supersedes_id?: string | null;
+  superseded_by?: string | null;
+  superseded_at?: number | null;
+  flagged_at?: number | null;
+  flagged_reason?: string | null;
+  embedding_model?: string | null;
 }
