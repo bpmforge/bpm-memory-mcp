@@ -4,9 +4,10 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 2.0 |
-| Date | 2026-01-16 |
+| Version | 3.0 |
+| Date | 2026-01-17 |
 | Status | Draft |
+| Review | Critically analyzed from AI perspective |
 
 ## Story Format
 
@@ -39,6 +40,8 @@ Stories are prioritized as:
 
 **Story Points:** 5
 
+**AI Analysis:** Necessary for adoption. Does not directly save tokens but enables the system.
+
 ---
 
 ### US-002: Skill Teaches Memory Patterns
@@ -54,8 +57,11 @@ Stories are prioritized as:
 - [ ] SKILL.md teaches query formulation
 - [ ] SKILL.md teaches memory type selection
 - [ ] Progressive disclosure (metadata ~100 tokens, full ~2000)
+- [ ] Skill MUST stay under 2000 tokens to maintain efficiency
 
 **Story Points:** 5
+
+**AI Analysis:** HIGH VALUE. Without guidance, I don't know when to store. The skill compounds savings across every recall. Token math: Skill load (2000) + recall (200) vs re-debugging (3000+) = 50%+ savings on repeated issues.
 
 ---
 
@@ -75,6 +81,8 @@ Stories are prioritized as:
 
 **Story Points:** 3
 
+**AI Analysis:** Foundation. Required for anything to work.
+
 ---
 
 ### US-004: Resource Exposure
@@ -82,7 +90,7 @@ Stories are prioritized as:
 **I want** to inspect memory state via MCP resources,
 **So that** I can understand what's stored.
 
-**Priority:** P1
+**Priority:** P2 *(Changed from P1)*
 **Traces To:** MCP-003
 
 **Acceptance Criteria:**
@@ -92,6 +100,8 @@ Stories are prioritized as:
 - [ ] Resources accessible via MCP protocol
 
 **Story Points:** 3
+
+**AI Analysis:** Debugging feature. I don't need to check "how many memories" in normal operation. Lowered to P2.
 
 ---
 
@@ -110,6 +120,8 @@ Stories are prioritized as:
 - [ ] Help text is clear and actionable
 
 **Story Points:** 3
+
+**AI Analysis:** Standard MCP requirement.
 
 ---
 
@@ -137,23 +149,28 @@ Claude, remember that we use Zod for validation in this project.
 
 **Story Points:** 5
 
+**AI Analysis:** HIGH VALUE. Core value proposition. Without memory: "What validation library?" (wasted turn). With memory: I just know. Token savings: 90% on repeated lookups (grep + read ~1000 tokens vs recall ~200 tokens).
+
 ---
 
-### US-007: Auto-Extract Entities
+### US-007: Entity Extraction Suggestions
 **As a** developer,
-**I want** claude-memory to automatically extract entities from stored content,
-**So that** I can build a knowledge graph without manual effort.
+**I want** claude-memory to suggest entities from stored content,
+**So that** I can build a knowledge graph with human verification.
 
-**Priority:** P1
+**Priority:** P2 *(Changed from P1, renamed from "Auto-Extract")*
 **Traces To:** FR-010
 
 **Acceptance Criteria:**
-- [ ] File names extracted as File entities
-- [ ] Function names extracted as Function entities
-- [ ] Type names extracted as Type entities
-- [ ] Relationships inferred from context
+- [ ] Suggest file names as potential File entities
+- [ ] Suggest function names as potential Function entities
+- [ ] Suggest type names as potential Type entities
+- [ ] **REQUIRE confirmation before creating entities**
+- [ ] Track extraction confidence scores
 
 **Story Points:** 5
+
+**AI Analysis:** RISKY without human verification. NLP entity extraction is ~80% accurate on technical content. 20% wrong extractions pollute the graph. Changed to suggestions-with-confirmation model.
 
 ---
 
@@ -179,6 +196,8 @@ What validation library do we use?
 
 **Story Points:** 5
 
+**AI Analysis:** HIGH VALUE. Essential for retrieval. "What validation library" must find "We use Zod" even without exact keyword match.
+
 ---
 
 ### US-009: Search Memories by Keyword
@@ -202,6 +221,8 @@ memory_recall "TS-001"
 ```
 
 **Story Points:** 3
+
+**AI Analysis:** HIGH VALUE. Code has identifiers (TS-001, FR-XXX) that need exact match. Semantic alone would miss these.
 
 ---
 
@@ -227,92 +248,107 @@ Forget that we use Express - we migrated to Fastify.
 
 **Story Points:** 3
 
+**AI Analysis:** VALID but relies on user telling me. Real problem: nobody remembers to tell me when things change. See US-046 (Staleness Detection) for automatic handling.
+
 ---
 
-### US-011: Update Existing Memories
+### US-011: Update Memory Atomically
 **As a** developer,
-**I want** to update memories with new information,
-**So that** I can correct or enhance existing facts.
+**I want** to update memories in a single atomic operation,
+**So that** I don't end up with contradictory information.
 
 **Priority:** P1
-**Traces To:** SK-001 (skill orchestrates store + forget)
+**Traces To:** MCP-002 *(Changed: now MCP tool, not skill composition)*
 
 **Acceptance Criteria:**
-- [ ] Skill orchestrates store + forget for updates
-- [ ] Updates content and re-embeds
-- [ ] Can mark as superseding old version
-- [ ] Conflict resolution (newer wins)
+- [ ] `memory_update` MCP tool (atomic operation)
+- [ ] Updates content and re-embeds in single transaction
+- [ ] Marks old version as superseded (maintains history)
+- [ ] Fails completely or succeeds completely (no partial state)
 
 **Story Points:** 3
+
+**AI Analysis:** REDESIGNED. Original "skill orchestrates store + forget" was non-atomic and risked inconsistent state. Now a proper atomic MCP tool.
 
 ---
 
 ## Epic 3: Memory Types
 
-### US-012: Working Memory for Current Task
+### US-012: Context Overflow Protection
 **As a** developer,
-**I want** Claude to maintain working memory during my session,
-**So that** it doesn't forget what we discussed earlier.
+**I want** essential context preserved when my session gets long,
+**So that** I don't lose important information to context limits.
 
-**Priority:** P0
+**Priority:** P0 *(Clarified purpose - was "Working Memory")*
 **Traces To:** FR-020
 
 **Acceptance Criteria:**
-- [ ] Recent tool calls cached
-- [ ] Current task context maintained
-- [ ] Scratchpad for temporary data
-- [ ] Cleared on session end
+- [ ] Track essential items that must survive compaction
+- [ ] Current task goals preserved
+- [ ] Recent critical tool results cached
+- [ ] Scratchpad for in-progress calculations
+- [ ] Integrates with US-027 (compaction)
 
 **Story Points:** 5
 
+**AI Analysis:** CLARIFIED. Original was vague ("working memory for current task"). My context window IS working memory. This story is specifically about what survives COMPACTION - the essential bits that must be preserved when context is summarized.
+
 ---
 
-### US-013: Project Persona from CLAUDE.md
+### US-013: Project Identity from CLAUDE.md
 **As a** developer,
-**I want** claude-memory to automatically sync my CLAUDE.md,
-**So that** Claude knows my project conventions immediately.
+**I want** claude-memory to parse my CLAUDE.md into structured blocks,
+**So that** key project info is always accessible efficiently.
 
-**Priority:** P0
+**Priority:** P1 *(Changed from P0)*
 **Traces To:** FR-021, HK-002
 
 **Acceptance Criteria:**
 - [ ] Hook triggers on CLAUDE.md read
-- [ ] Parsed and stored in core memory persona block
-- [ ] Re-parsed when file changes
-- [ ] Included in every response context
+- [ ] Parsed into structured blocks (persona, guidelines, architecture)
+- [ ] Stored in core memory for fast access
+- [ ] Re-parsed only when file hash changes
+- [ ] **Must not duplicate Claude Code's existing CLAUDE.md handling**
 
 **Story Points:** 5
 
+**AI Analysis:** QUESTIONABLE. Claude Code already reads CLAUDE.md. Need to verify this adds value beyond existing behavior. Lowered to P1 until value is proven.
+
 ---
 
-### US-014: Self-Editing Core Memory
+### US-014: Learn User Preferences with Approval
 **As a** developer,
-**I want** Claude to update its understanding of my preferences,
-**So that** it learns and adapts over time.
+**I want** Claude to notice my preferences and ask before remembering them,
+**So that** it learns and adapts without feeling invasive.
 
 **Priority:** P0
 **Traces To:** FR-021
 
 **Acceptance Criteria:**
-- [ ] Claude can edit persona, human, goals, project blocks
-- [ ] Edits persisted per project
-- [ ] User can review/edit blocks
+- [ ] Claude can propose preference observations
+- [ ] **User must approve before storing** ("I noticed you prefer X. Should I remember this?")
+- [ ] User can review all learned preferences
+- [ ] User can delete any preference
 - [ ] Changes reflected immediately
 
 **Example:**
 ```
-Claude learns: "User prefers single-line if statements without braces"
+Claude notices: "You've used single-line if statements 5 times without braces"
+Claude asks: "Should I remember that you prefer single-line if statements without braces?"
+User: "Yes"
 > Core memory (human) updated
 ```
 
 **Story Points:** 5
 
+**AI Analysis:** REDESIGNED. Original could learn wrong patterns ("user hates comments" from one instance). Now requires explicit approval. High value WITH guardrails.
+
 ---
 
 ### US-015: Long-Term Fact Storage
 **As a** developer,
-**I want** important facts stored permanently,
-**So that** they persist across many sessions.
+**I want** important facts stored permanently with citations,
+**So that** they persist across many sessions and are verifiable.
 
 **Priority:** P0
 **Traces To:** FR-022, HK-003
@@ -321,9 +357,11 @@ Claude learns: "User prefers single-line if statements without braces"
 - [ ] Facts stored in archival memory
 - [ ] Include citations (source file + line)
 - [ ] Searchable by semantic and keyword
-- [ ] Hook logs file changes as facts
+- [ ] Hook logs significant file changes as facts
 
 **Story Points:** 3
+
+**AI Analysis:** HIGH VALUE. Citations make facts verifiable. "auth flow is at src/auth/flow.ts:45-120" - I can go verify this. Token savings: 80% vs grep + read every session.
 
 ---
 
@@ -332,41 +370,48 @@ Claude learns: "User prefers single-line if statements without braces"
 **I want** Claude to remember how we solved errors,
 **So that** it can help faster with similar issues.
 
-**Priority:** P1
+**Priority:** P0 *(Changed from P1)*
 **Traces To:** FR-022, HK-004
 
 **Acceptance Criteria:**
 - [ ] Hook captures Bash errors automatically
-- [ ] Error -> solution pairs stored
+- [ ] Error → solution pairs stored with context
 - [ ] Retrieved when similar errors occur
-- [ ] Includes context (file, stack trace pattern)
+- [ ] Includes context (file, command, stack trace pattern)
+- [ ] Similarity matching considers error type, not just text
 
 **Example:**
 ```
-Previously: "CORS error in API" -> "Add cors middleware"
-Now: "Getting CORS blocked on /api/users"
-> Recall: "Add cors middleware solved similar CORS error"
+Previously: "CORS error on /api/users" → "Add cors middleware to express app"
+Now: "CORS error on /api/products"
+> Recall: "Similar CORS error solved before. Solution: Add cors middleware"
 ```
 
 **Story Points:** 5
 
+**AI Analysis:** EXTREMELY HIGH VALUE. Elevated to P0. Error debugging can take 5-10 turns. If I recall the pattern: 1-2 turns. Turn savings: 3-8 turns. Token savings: potentially 3000+ tokens per recurring error type.
+
 ---
 
-### US-017: Memory Consolidation
+### US-017: Flag Potentially Stale Memories
 **As a** developer,
-**I want** claude-memory to clean up and organize memories,
-**So that** storage stays efficient and relevant.
+**I want** claude-memory to flag memories that may be outdated,
+**So that** I can review and clean them up.
 
-**Priority:** P1
+**Priority:** P1 *(Renamed from "Memory Consolidation", completely redesigned)*
 **Traces To:** FR-023
 
 **Acceptance Criteria:**
-- [ ] Old memories decay in relevance
-- [ ] Duplicate memories merged
-- [ ] Contradicted facts marked/removed
-- [ ] Runs automatically on session end
+- [ ] Flag memories not accessed in X sessions as "potentially stale"
+- [ ] Flag memories that may contradict newer ones
+- [ ] Flag potential duplicates for review
+- [ ] **Require human confirmation before any deletion or merge**
+- [ ] Provide review interface: "3 memories may be stale. Review?"
+- [ ] Never auto-delete without explicit approval
 
 **Story Points:** 5
+
+**AI Analysis:** COMPLETELY REDESIGNED. Original auto-consolidated (decay, merge, delete). This is DANGEROUS - could delete valid memories or merge distinct facts. New version FLAGS for human review. Safer.
 
 ---
 
@@ -396,23 +441,28 @@ Query: "how to handle TS-001 validation"
 
 **Story Points:** 8
 
+**AI Analysis:** HIGH VALUE. Essential infrastructure. Without hybrid search, I miss relevant memories.
+
 ---
 
-### US-019: Recency-Aware Search
+### US-019: Type-Aware Recency Ranking
 **As a** developer,
-**I want** recent memories to rank higher,
-**So that** Claude uses the most current information.
+**I want** recent memories ranked appropriately by type,
+**So that** Claude uses current information without losing timeless facts.
 
 **Priority:** P1
 **Traces To:** FR-033
 
 **Acceptance Criteria:**
-- [ ] Recent memories boosted in ranking
-- [ ] Decay factor configurable
-- [ ] Old memories still findable
-- [ ] Access frequency also considered
+- [ ] ERROR memories: strong recency decay (solutions evolve)
+- [ ] FACT memories: weak/no recency decay (facts are timeless)
+- [ ] PREFERENCE memories: weak recency decay (preferences are stable)
+- [ ] DECISION memories: moderate decay (decisions can be revisited)
+- [ ] Decay factors configurable per type
 
-**Story Points:** 3
+**Story Points:** 5 *(Increased from 3)*
+
+**AI Analysis:** REDESIGNED. Original had uniform recency decay, which is wrong. "Database is PostgreSQL" doesn't decay. Error solutions might. Now type-aware.
 
 ---
 
@@ -421,7 +471,7 @@ Query: "how to handle TS-001 validation"
 **I want** to see how search results were ranked,
 **So that** I can understand and tune behavior.
 
-**Priority:** P1
+**Priority:** P2 *(Changed from P1)*
 **Traces To:** MCP-003
 
 **Acceptance Criteria:**
@@ -431,6 +481,8 @@ Query: "how to handle TS-001 validation"
 - [ ] Latency measurements
 
 **Story Points:** 3
+
+**AI Analysis:** LOW PRIORITY. Debugging feature. I don't care about match counts in normal operation. Lowered to P2.
 
 ---
 
@@ -452,6 +504,8 @@ Query: "how to handle TS-001 validation"
 
 **Story Points:** 5
 
+**AI Analysis:** ESSENTIAL. No embeddings = no semantic search. Foundation.
+
 ---
 
 ### US-022: Embedding Caching
@@ -469,6 +523,8 @@ Query: "how to handle TS-001 validation"
 - [ ] Invalidated on content change
 
 **Story Points:** 3
+
+**AI Analysis:** VALID. Standard optimization.
 
 ---
 
@@ -494,25 +550,30 @@ To enable semantic search, run: ollama serve
 
 **Story Points:** 3
 
+**AI Analysis:** HIGH VALUE. Reliability is critical. Graceful degradation means the system is always useful.
+
 ---
 
 ## Epic 6: Knowledge Graph
 
 ### US-024: Track Code Entities
 **As a** developer,
-**I want** claude-memory to track entities in my codebase,
-**So that** it understands code structure.
+**I want** claude-memory to track significant code entities,
+**So that** it understands code structure across sessions.
 
-**Priority:** P1
+**Priority:** P2 *(Changed from P1)*
 **Traces To:** FR-050, FR-051
 
 **Acceptance Criteria:**
-- [ ] File entities with paths
+- [ ] File entities with paths (created manually or via hooks)
 - [ ] Function entities with signatures
 - [ ] Type entities with definitions
 - [ ] Relationships between entities
+- [ ] Clear staleness indicators when code changes
 
 **Story Points:** 8
+
+**AI Analysis:** QUESTIONABLE. LSP already tracks code symbols. This adds cross-session persistence but requires maintenance as code changes. High cost, moderate value. Lowered to P2.
 
 ---
 
@@ -532,6 +593,8 @@ To enable semantic search, run: ollama serve
 
 **Story Points:** 5
 
+**AI Analysis:** LOW VALUE. Rarely needed. Keep at P2, consider cutting if scope needs trimming.
+
 ---
 
 ### US-026: Explore Entity Relationships
@@ -539,7 +602,7 @@ To enable semantic search, run: ollama serve
 **I want** to explore how entities are connected,
 **So that** I can understand dependencies and impacts.
 
-**Priority:** P1
+**Priority:** P2 *(Changed from P1)*
 **Traces To:** FR-053
 
 **Acceptance Criteria:**
@@ -556,6 +619,8 @@ graph_query "find_connected" entity="UserService" depth=2
 ```
 
 **Story Points:** 5
+
+**AI Analysis:** MODERATE VALUE. I can grep/read to figure out dependencies. Graph is faster (~800 token savings) but may be stale. Lowered to P2.
 
 ---
 
@@ -574,8 +639,11 @@ graph_query "find_connected" entity="UserService" depth=2
 - [ ] Invokes compact.sh script
 - [ ] Summarizes conversation history
 - [ ] Extracts key facts to archival
+- [ ] Preserves items marked essential (US-012)
 
 **Story Points:** 8
+
+**AI Analysis:** EXTREMELY HIGH VALUE. This is a major pain point. Without compaction, long sessions just END. With compaction, I can continue indefinitely. Could save entire session restarts (100k+ tokens over time).
 
 ---
 
@@ -588,12 +656,14 @@ graph_query "find_connected" entity="UserService" depth=2
 **Traces To:** FR-060, SK-002
 
 **Acceptance Criteria:**
-- [ ] Decisions explicitly extracted
-- [ ] Stored in archival before summarizing
-- [ ] Cited in summary
+- [ ] Decisions explicitly extracted before summarizing
+- [ ] Stored in archival with DECISION type
+- [ ] Cited in summary ("We decided to use PostgreSQL - see memory #123")
 - [ ] Available for future recall
 
 **Story Points:** 5
+
+**AI Analysis:** HIGH VALUE. Essential companion to US-027. If I compact but lose "we chose PostgreSQL", that's a failure.
 
 ---
 
@@ -602,7 +672,7 @@ graph_query "find_connected" entity="UserService" depth=2
 **I want** to see how context budget is allocated,
 **So that** I can understand what's using space.
 
-**Priority:** P1
+**Priority:** P2 *(Changed from P1)*
 **Traces To:** FR-061, SK-003
 
 **Acceptance Criteria:**
@@ -613,6 +683,8 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 3
 
+**AI Analysis:** LOW PRIORITY. Debugging feature. Useful for troubleshooting but not normal operation. Lowered to P2.
+
 ---
 
 ### US-030: Memory and Context Health Check
@@ -620,7 +692,7 @@ graph_query "find_connected" entity="UserService" depth=2
 **I want** to check the health of claude-memory,
 **So that** I can diagnose issues.
 
-**Priority:** P1
+**Priority:** P2 *(Changed from P1)*
 **Traces To:** FR-062
 
 **Acceptance Criteria:**
@@ -631,6 +703,8 @@ graph_query "find_connected" entity="UserService" depth=2
 - [ ] Last consolidation time
 
 **Story Points:** 3
+
+**AI Analysis:** LOW PRIORITY. Ops/debugging feature. Lowered to P2.
 
 ---
 
@@ -652,6 +726,8 @@ graph_query "find_connected" entity="UserService" depth=2
 - [ ] Includes conversation summary
 
 **Story Points:** 5
+
+**AI Analysis:** HIGH VALUE. Major UX improvement. Without: user re-explains context (2000+ tokens, 3-5 turns). With: instant continuation.
 
 ---
 
@@ -678,6 +754,8 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 5
 
+**AI Analysis:** HIGH VALUE. Paired with US-031. Turn savings: 2-5 turns per session start.
+
 ---
 
 ### US-033: List Available Sessions
@@ -696,6 +774,8 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 3
 
+**AI Analysis:** MODERATE VALUE. Sometimes user wants specific past session, not just latest.
+
 ---
 
 ## Epic 9: Project Isolation
@@ -709,37 +789,44 @@ graph_query "find_connected" entity="UserService" depth=2
 **Traces To:** FR-080, FR-081, HK-006
 
 **Acceptance Criteria:**
-- [ ] Detect git root or CLAUDE.md
+- [ ] Detect git root as primary project boundary
+- [ ] Fall back to CLAUDE.md location
+- [ ] Fall back to working directory
 - [ ] Create unique project hash
 - [ ] Use separate database per project
-- [ ] No manual configuration needed
 
 **Story Points:** 3
+
+**AI Analysis:** ESSENTIAL. Correctness requirement. Wrong project = wrong memories.
 
 ---
 
 ### US-035: Automatic Project Switching
 **As a** developer,
-**I want** projects to switch automatically when I change directories,
+**I want** projects to switch automatically when I change git repositories,
 **So that** I don't need to manually switch.
 
 **Priority:** P0
 **Traces To:** FR-082, HK-006
 
 **Acceptance Criteria:**
-- [ ] Hook detects directory change
+- [ ] Hook detects when git root changes
+- [ ] **Project boundary = git repository root** (clarified)
+- [ ] Within monorepo = single project (shared memories)
 - [ ] Saves current session first
 - [ ] Loads target project memory
 - [ ] Clear transition message
 
 **Example:**
 ```
-(cd to different project)
+(cd from ~/project-a to ~/project-b)
 > Saved session for project-a
 > Switched to project-b (47 memories)
 ```
 
 **Story Points:** 5
+
+**AI Analysis:** CLARIFIED. Original didn't define "project" clearly. Now explicit: git root = project boundary. Monorepo = one project.
 
 ---
 
@@ -758,6 +845,8 @@ graph_query "find_connected" entity="UserService" depth=2
 - [ ] <5% contamination rate in tests
 
 **Story Points:** 5
+
+**AI Analysis:** ESSENTIAL. Correctness requirement. "Uses Express" from project-a must not appear in project-b.
 
 ---
 
@@ -779,6 +868,8 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 3
 
+**AI Analysis:** ESSENTIAL. Foundation.
+
 ---
 
 ### US-038: Database Schema Upgrades
@@ -796,6 +887,8 @@ graph_query "find_connected" entity="UserService" depth=2
 - [ ] Rollback if migration fails
 
 **Story Points:** 5
+
+**AI Analysis:** VALID. Necessary for long-term maintenance.
 
 ---
 
@@ -815,6 +908,8 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 3
 
+**AI Analysis:** VALID for portability. P2 appropriate.
+
 ---
 
 ### US-040: Configure Behavior
@@ -832,6 +927,8 @@ graph_query "find_connected" entity="UserService" depth=2
 - [ ] Sensible defaults for everything
 
 **Story Points:** 3
+
+**AI Analysis:** VALID. Standard configuration feature.
 
 ---
 
@@ -852,6 +949,8 @@ graph_query "find_connected" entity="UserService" depth=2
 - [ ] Version tracking
 
 **Story Points:** 3
+
+**AI Analysis:** VALID for distribution.
 
 ---
 
@@ -882,6 +981,8 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 5
 
+**AI Analysis:** VALID for distribution.
+
 ---
 
 ### US-043: Marketplace Distribution
@@ -900,6 +1001,8 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 3
 
+**AI Analysis:** VALID for adoption. P2 appropriate.
+
 ---
 
 ## Epic 12: Hook Automation
@@ -909,7 +1012,7 @@ graph_query "find_connected" entity="UserService" depth=2
 **I want** errors captured automatically,
 **So that** Claude learns from my mistakes.
 
-**Priority:** P1
+**Priority:** P0 *(Changed from P1)*
 **Traces To:** HK-004
 
 **Acceptance Criteria:**
@@ -920,11 +1023,13 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Story Points:** 3
 
+**AI Analysis:** HIGH VALUE. Elevated to P0. Automates what I'd do manually. Reduces friction.
+
 ---
 
-### US-045: File Change Logging
+### US-045: Significant File Change Logging
 **As a** developer,
-**I want** file changes logged automatically,
+**I want** significant file changes logged automatically,
 **So that** Claude knows what was modified.
 
 **Priority:** P1
@@ -932,11 +1037,114 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Acceptance Criteria:**
 - [ ] PostToolUse hook on Edit|Write
-- [ ] Logs file path and change summary
+- [ ] **Filter: Only log new files, deleted files, and major refactors**
+- [ ] Skip minor edits (single-line changes, formatting)
 - [ ] Updates knowledge graph entities
 - [ ] No manual action required
 
 **Story Points:** 3
+
+**AI Analysis:** REDESIGNED. Original logged EVERY edit = noise. If I edit 50 files in refactoring, that's 50 useless memories. Now filters for significant changes only.
+
+---
+
+## Epic 13: Memory Quality (NEW)
+
+### US-046: Automatic Staleness Detection
+**As a** developer,
+**I want** memories automatically flagged when they may be stale,
+**So that** I don't rely on outdated information.
+
+**Priority:** P0 *(NEW)*
+**Traces To:** FR-012
+
+**Acceptance Criteria:**
+- [ ] Flag memories not accessed in X sessions (configurable, default 10)
+- [ ] Flag memories whose source file no longer exists
+- [ ] Flag memories whose source file content has changed significantly
+- [ ] Provide staleness review: "5 memories may be stale. Review?"
+- [ ] User confirms before any deletion
+
+**Story Points:** 5
+
+**AI Analysis:** NEW - CRITICAL ADDITION. Original US-010 relied on user telling me to forget. But users don't remember. This automatically detects likely-stale memories. Prevents me from giving outdated info.
+
+---
+
+### US-047: Validate Memory on Recall
+**As a** developer,
+**I want** recalled facts optionally validated against current state,
+**So that** I can trust the information is still accurate.
+
+**Priority:** P1 *(NEW)*
+**Traces To:** FR-011
+
+**Acceptance Criteria:**
+- [ ] When recalling a fact with file citation, optionally verify file exists
+- [ ] When recalling a fact with line citation, check if content still matches
+- [ ] Flag validated memories with "verified: true"
+- [ ] Flag unverifiable memories with warning
+- [ ] Configurable: always validate / never validate / ask
+
+**Example:**
+```
+Recall: "Auth flow is in src/auth/flow.ts:45-120"
+Validation: File exists, content matches stored summary
+> Verified memory
+```
+
+**Story Points:** 5
+
+**AI Analysis:** NEW - HIGH VALUE. Citations are only useful if they're still accurate. This validates that the file/line still contains what I think it does.
+
+---
+
+### US-048: Confidence Decay on Wrong Recalls
+**As a** developer,
+**I want** memory confidence to decrease when recalls prove wrong,
+**So that** the system learns from mistakes.
+
+**Priority:** P1 *(NEW)*
+**Traces To:** FR-023
+
+**Acceptance Criteria:**
+- [ ] Track when recalled memory leads to wrong action
+- [ ] User can mark recall as "wrong" or "outdated"
+- [ ] Decrease confidence score for that memory
+- [ ] Low-confidence memories ranked lower in future recalls
+- [ ] Very low confidence triggers staleness flag
+
+**Example:**
+```
+Recall: "Uses Express for web framework"
+User: "That's outdated, we use Fastify now"
+> Memory confidence: 0.9 → 0.3
+> Memory flagged for review
+```
+
+**Story Points:** 5
+
+**AI Analysis:** NEW - HIGH VALUE. Learning from mistakes. If I recall wrong info and user corrects me, that memory should be flagged/downranked.
+
+---
+
+### US-049: Session Start Memory Diff
+**As a** developer,
+**I want** to see what may have changed since my last session,
+**So that** I'm aware of potential staleness upfront.
+
+**Priority:** P2 *(NEW)*
+**Traces To:** FR-071
+
+**Acceptance Criteria:**
+- [ ] On session restore, scan for changed source files
+- [ ] List memories that reference changed files
+- [ ] "Since last session: 3 source files changed, 5 memories may be affected"
+- [ ] Optional: Review affected memories
+
+**Story Points:** 3
+
+**AI Analysis:** NEW - MODERATE VALUE. Proactive staleness awareness. Better to know upfront than to give wrong info and be corrected.
 
 ---
 
@@ -948,10 +1156,10 @@ graph_query "find_connected" entity="UserService" depth=2
 
 | Priority | Count | Story Points |
 |----------|-------|--------------|
-| P0 (Must Have) | 28 | 127 |
-| P1 (Should Have) | 15 | 60 |
-| P2 (Nice to Have) | 2 | 8 |
-| **Total** | **45** | **195** |
+| P0 (Must Have) | 27 | 134 |
+| P1 (Should Have) | 12 | 53 |
+| P2 (Nice to Have) | 10 | 36 |
+| **Total** | **49** | **223** |
 
 ### By Epic
 
@@ -960,7 +1168,7 @@ graph_query "find_connected" entity="UserService" depth=2
 | 1. Plugin Installation | 5 | 19 |
 | 2. Memory Storage | 6 | 24 |
 | 3. Memory Types | 6 | 28 |
-| 4. Hybrid Search | 3 | 14 |
+| 4. Hybrid Search | 3 | 16 |
 | 5. Embeddings | 3 | 11 |
 | 6. Knowledge Graph | 3 | 18 |
 | 7. Context Engineering | 4 | 19 |
@@ -969,6 +1177,40 @@ graph_query "find_connected" entity="UserService" depth=2
 | 10. Storage & Config | 4 | 14 |
 | 11. Plugin Distribution | 3 | 11 |
 | 12. Hook Automation | 2 | 6 |
+| 13. Memory Quality (NEW) | 4 | 18 |
+
+---
+
+## Changes from v2.0
+
+### Stories Modified
+| Story | Change | Rationale |
+|-------|--------|-----------|
+| US-004 | P1 → P2 | Debugging feature, not needed for normal operation |
+| US-007 | P1 → P2, renamed | Entity extraction needs human verification, risky to auto-extract |
+| US-011 | Redesigned | Changed from skill composition to atomic MCP tool |
+| US-012 | Clarified | Renamed to "Context Overflow Protection", clarified purpose |
+| US-013 | P0 → P1 | May duplicate Claude Code's existing behavior |
+| US-014 | Redesigned | Added required user approval before learning |
+| US-016 | P1 → P0 | Error resolution is extremely high value |
+| US-017 | Completely redesigned | Changed from auto-consolidation to flagging with human review |
+| US-019 | Redesigned | Changed from uniform decay to type-aware decay |
+| US-020 | P1 → P2 | Debugging feature |
+| US-024 | P1 → P2 | Overlaps with LSP, high maintenance cost |
+| US-026 | P1 → P2 | Can grep/read instead, graph may be stale |
+| US-029 | P1 → P2 | Debugging feature |
+| US-030 | P1 → P2 | Debugging feature |
+| US-035 | Clarified | Defined "project" = git root boundary |
+| US-044 | P1 → P0 | Automates high-value error capture |
+| US-045 | Redesigned | Added significance filtering to avoid noise |
+
+### Stories Added
+| Story | Priority | Rationale |
+|-------|----------|-----------|
+| US-046: Staleness Detection | P0 | Critical - can't rely on users to tell me when things change |
+| US-047: Validate on Recall | P1 | Citations only useful if verified current |
+| US-048: Confidence Decay | P1 | Learn from wrong recalls |
+| US-049: Session Start Diff | P2 | Proactive staleness awareness |
 
 ---
 
@@ -986,7 +1228,7 @@ graph_query "find_connected" entity="UserService" depth=2
 | US-008 | FR-011 |
 | US-009 | FR-011 |
 | US-010 | FR-012 |
-| US-011 | SK-001 |
+| US-011 | MCP-002 |
 | US-012 | FR-020 |
 | US-013 | FR-021, HK-002 |
 | US-014 | FR-021 |
@@ -1021,6 +1263,10 @@ graph_query "find_connected" entity="UserService" depth=2
 | US-043 | PL-003 |
 | US-044 | HK-004 |
 | US-045 | HK-003 |
+| US-046 | FR-012 |
+| US-047 | FR-011 |
+| US-048 | FR-023 |
+| US-049 | FR-071 |
 
 ---
 
@@ -1028,20 +1274,27 @@ graph_query "find_connected" entity="UserService" depth=2
 
 | Persona | Key Stories |
 |---------|-------------|
-| Alex (Senior Dev) | US-006, US-008, US-018, US-027, US-031 |
-| Sarah (Tech Lead) | US-020, US-024, US-030, US-036, US-039 |
-| Jordan (OSS Maintainer) | US-034, US-035, US-036, US-032, US-042 |
-| Morgan (AI-Curious Dev) | US-001, US-002, US-013, US-023, US-041 |
+| Alex (Senior Dev) | US-006, US-008, US-016, US-027, US-031, US-046 |
+| Sarah (Tech Lead) | US-017, US-024, US-030, US-036, US-039, US-048 |
+| Jordan (OSS Maintainer) | US-034, US-035, US-036, US-032, US-042, US-049 |
+| Morgan (AI-Curious Dev) | US-001, US-002, US-014, US-023, US-041, US-047 |
 
 ---
 
-## Hybrid Architecture Alignment
+## AI Analysis Summary
 
-This user stories document reflects the hybrid plugin architecture:
+### Highest Value Stories (from Claude's perspective)
+1. **US-027/028**: Context compaction - extends session lifetime indefinitely
+2. **US-016**: Error resolution - 3-8 turns saved per recurring error
+3. **US-031/032**: Session save/restore - 2-5 turns saved per session start
+4. **US-046**: Staleness detection - prevents wrong information
+5. **US-006/008/009**: Store and search - core value proposition (80%+ token savings)
 
-| Component | Related Stories |
-|-----------|----------------|
-| **Skill Layer** | US-002, US-011, US-027, US-028, US-029 |
-| **MCP Server** | US-003, US-004, US-005, US-006, US-008, US-010 |
-| **Hooks Layer** | US-013, US-015, US-016, US-031, US-032, US-034, US-035, US-044, US-045 |
-| **Plugin Distribution** | US-001, US-041, US-042, US-043 |
+### Stories That Needed Major Revision
+1. **US-017**: Auto-consolidation was dangerous (could delete valid data)
+2. **US-014**: Learning without approval was invasive
+3. **US-007**: Auto-extraction without verification creates bad data
+4. **US-045**: Logging every edit creates noise
+
+### Key Insight
+Memory systems fail not from lack of storage but from **staleness and noise**. The new Epic 13 (Memory Quality) addresses this directly.
