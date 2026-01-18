@@ -1,0 +1,51 @@
+{
+  "name": "claude-memory",
+  "version": "1.0.0",
+  "description": "Hybrid Claude Code plugin for persistent intelligent memory",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p mcp/memory-server/tsconfig.json",
+    "dev": "tsx watch mcp/memory-server/src/index.ts",
+    "start": "node mcp/memory-server/dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint mcp/memory-server/src --ext .ts",
+    "lint:fix": "eslint mcp/memory-server/src --ext .ts --fix",
+    "format": "prettier --write \"mcp/memory-server/src/**/*.ts\"",
+    "typecheck": "tsc --noEmit -p mcp/memory-server/tsconfig.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^12.5.0",
+    "natural": "^8.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "files": [
+    "mcp/memory-server/dist",
+    "skills",
+    "hooks",
+    ".claude-plugin"
+  ],
+  "keywords": [
+    "claude",
+    "mcp",
+    "memory",
+    "embeddings",
+    "claude-code"
+  ],
+  "author": "",
+  "license": "MIT"
+}
