@@ -13,6 +13,8 @@ import { connectionPool, runMigrations, getProjectId } from './storage/index.js'
 import { EmbeddingService } from './embeddings/index.js';
 import { HybridSearch } from './search/index.js';
 import { MemoryRepository } from './storage/repository.js';
+import { SessionRepository } from './storage/session.js';
+import { CoreMemoryRepository } from './storage/core_memory.js';
 import {
   MemoryStoreInputSchema,
   MemoryRecallInputSchema,
@@ -30,6 +32,8 @@ let currentProjectId: string | null = null;
 let embeddingService: EmbeddingService | null = null;
 let hybridSearch: HybridSearch | null = null;
 let memoryRepository: MemoryRepository | null = null;
+let sessionRepository: SessionRepository | null = null;
+let coreMemoryRepository: CoreMemoryRepository | null = null;
 
 /**
  * Initialize services for a project
@@ -51,6 +55,13 @@ async function initializeForProject(projectId: string): Promise<void> {
 
   hybridSearch = new HybridSearch(db, embeddingService);
   memoryRepository = new MemoryRepository(db);
+  sessionRepository = new SessionRepository(db);
+  coreMemoryRepository = new CoreMemoryRepository(db);
+
+  // Initialize core memory if needed
+  if (!coreMemoryRepository.isInitialized(projectId)) {
+    coreMemoryRepository.initializeDefaults(projectId);
+  }
 }
 
 /**
@@ -288,16 +299,78 @@ function createServer(): Server {
 
         case 'session_save': {
           const input = SessionSaveInputSchema.parse(args ?? {});
-          // TODO: Implement full session save
+
+          if (!sessionRepository) {
+            return {
+              content: [{ type: 'text', text: 'Error: Session repository not initialized' }],
+              isError: true,
+            };
+          }
+
+          const workingMemory = sessionRepository.createDefaultWorkingMemory();
+          const summary = input.summary ?? 'Session saved automatically';
+          const sessionId = sessionRepository.saveSession(projectId, workingMemory, summary);
+
+          // Prune old sessions to keep storage bounded
+          sessionRepository.pruneOldSessions(projectId, 10);
+
           return {
-            content: [{ type: 'text', text: `Session saved: ${input.summary ?? 'No summary'}` }],
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  sessionId,
+                  summary,
+                  message: 'Session saved successfully',
+                }),
+              },
+            ],
           };
         }
 
         case 'session_restore': {
-          // TODO: Implement full session restore
+          if (!sessionRepository) {
+            return {
+              content: [{ type: 'text', text: 'Error: Session repository not initialized' }],
+              isError: true,
+            };
+          }
+
+          const session = sessionRepository.getLatestSession(projectId);
+
+          if (!session) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    message: 'No previous session found',
+                    isNewSession: true,
+                  }),
+                },
+              ],
+            };
+          }
+
+          // Mark session as resumed
+          sessionRepository.markResumed(session.id);
+
           return {
-            content: [{ type: 'text', text: 'Session restored (stub)' }],
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  sessionId: session.id,
+                  summary: session.conversationSummary,
+                  createdAt: session.createdAt.toISOString(),
+                  coreMemory: {
+                    persona: session.coreMemorySnapshot.persona.content.substring(0, 100),
+                    goals: session.coreMemorySnapshot.goals.content.substring(0, 100),
+                  },
+                  message: 'Session restored successfully',
+                }),
+              },
+            ],
           };
         }
 
