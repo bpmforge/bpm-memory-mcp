@@ -41,6 +41,7 @@ memory_store({
 - Higher confidence (0.8-1.0) for verified facts
 - Lower confidence (0.5-0.7) for inferences
 - Always cite source files when possible
+- Language is auto-detected from citation file extension
 
 ## Recalling Memories
 
@@ -48,7 +49,8 @@ memory_store({
 memory_recall({
   query: "authentication token handling",
   type: "error",
-  limit: 5
+  limit: 5,
+  language: "typescript"  // optional: filter by language
 })
 ```
 
@@ -57,6 +59,53 @@ memory_recall({
 - Filter by type when looking for specific info
 - Broader queries find more, narrow finds precise
 - Combine with minConfidence for reliable results
+- Filter by language when working in a specific file type
+
+**Languages:** typescript, javascript, python, rust, go, java, c, cpp, ruby, php, shell, sql, markdown, json, yaml
+
+## Providing Feedback
+
+After recalling a memory, provide feedback to improve future results:
+
+```
+memory_feedback({
+  id: "memory-uuid",
+  feedback: "helpful"  // helpful, wrong, outdated, duplicate
+})
+```
+
+**Feedback types:**
+| Type | Effect | Use when |
+|------|--------|----------|
+| `helpful` | +5% confidence | Memory was useful |
+| `wrong` | -20% confidence, flag | Memory contains errors |
+| `outdated` | -30% confidence, flag | Information has changed |
+| `duplicate` | No change, link | Duplicate of another memory |
+
+**With correction:**
+```
+memory_feedback({
+  id: "memory-uuid",
+  feedback: "wrong",
+  correction: "The correct approach is..."
+})
+```
+This creates a new version superseding the old memory.
+
+## Updating Memories
+
+When information changes, update creates a new version:
+
+```
+memory_update({
+  id: "memory-uuid",
+  content: "New corrected content..."
+})
+```
+
+- Old version is preserved (not deleted)
+- New version has incremented version number
+- Search returns only latest versions by default
 
 ## Session Flow
 

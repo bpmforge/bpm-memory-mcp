@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 5;
+export const CURRENT_VERSION = 6;
 
 /**
  * Initial schema - Version 1
@@ -220,6 +220,36 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
     down: `
       DROP INDEX IF EXISTS idx_memories_flagged;
       -- Note: SQLite doesn't support DROP COLUMN directly
+    `,
+  },
+  // V6: Language Backfill - Populate language from existing citations
+  {
+    version: 6,
+    up: `
+      UPDATE memories
+      SET language = CASE
+        WHEN citation LIKE '%.ts:%' OR citation LIKE '%.tsx:%' THEN 'typescript'
+        WHEN citation LIKE '%.js:%' OR citation LIKE '%.jsx:%' THEN 'javascript'
+        WHEN citation LIKE '%.py:%' THEN 'python'
+        WHEN citation LIKE '%.rs:%' THEN 'rust'
+        WHEN citation LIKE '%.go:%' THEN 'go'
+        WHEN citation LIKE '%.java:%' THEN 'java'
+        WHEN citation LIKE '%.c:%' OR citation LIKE '%.h:%' THEN 'c'
+        WHEN citation LIKE '%.cpp:%' OR citation LIKE '%.cc:%' OR citation LIKE '%.hpp:%' THEN 'cpp'
+        WHEN citation LIKE '%.rb:%' THEN 'ruby'
+        WHEN citation LIKE '%.php:%' THEN 'php'
+        WHEN citation LIKE '%.sh:%' OR citation LIKE '%.bash:%' THEN 'shell'
+        WHEN citation LIKE '%.sql:%' THEN 'sql'
+        WHEN citation LIKE '%.md:%' THEN 'markdown'
+        WHEN citation LIKE '%.json:%' THEN 'json'
+        WHEN citation LIKE '%.yaml:%' OR citation LIKE '%.yml:%' THEN 'yaml'
+        ELSE NULL
+      END
+      WHERE citation IS NOT NULL AND language IS NULL;
+    `,
+    down: `
+      -- Backfill is idempotent, no rollback needed
+      -- Language values remain but can be re-computed
     `,
   },
 ];
