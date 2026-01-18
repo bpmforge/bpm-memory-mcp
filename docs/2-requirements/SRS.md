@@ -680,16 +680,22 @@ The system SHALL re-rank fused results by additional factors.
 ### 2.8 Embeddings
 
 #### FR-040: Embedding Provider Abstraction
-The system SHALL support multiple embedding providers.
+The system SHALL support multiple embedding providers as first-class options.
 
 **Providers:**
-| Provider | Model | Dimensions | Status |
-|----------|-------|------------|--------|
-| Ollama | nomic-embed-text-v2-moe | 768/256 | Primary |
-| LM Studio | nomic-embed-text | 768 | Fallback |
+| Provider | Default Endpoint | API Format | Status |
+|----------|-----------------|------------|--------|
+| Ollama | localhost:11434 | Ollama native | Supported |
+| LM Studio | localhost:1234 | OpenAI-compatible | Supported |
+
+**Common Interface:**
+All providers implement:
+- `listModels()` - Returns available embedding models
+- `embed(text)` - Returns vector for text
+- `health()` - Returns provider status
 
 **Priority:** P0 (Must Have)
-**Traces To:** US-021
+**Traces To:** US-021, US-050
 
 ---
 
@@ -733,6 +739,123 @@ The system SHALL function without embedding server.
 
 **Priority:** P0 (Must Have)
 **Traces To:** US-023
+
+---
+
+#### FR-044: Provider Auto-Detection
+The system SHALL auto-detect available embedding providers.
+
+**Behavior:**
+1. On startup, probe known provider endpoints:
+   - Ollama: `http://localhost:11434/api/tags`
+   - LM Studio: `http://localhost:1234/v1/models`
+2. Use first responding provider automatically
+3. Cache detection result for session lifetime
+4. Allow manual override via configuration
+
+**Endpoints:**
+| Provider | Health Check | Models List |
+|----------|-------------|-------------|
+| Ollama | GET /api/tags | GET /api/tags |
+| LM Studio | GET /v1/models | GET /v1/models |
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-050
+
+---
+
+#### FR-045: Model Discovery
+The system SHALL discover available embedding models from providers.
+
+**Behavior:**
+1. Query provider's model listing endpoint
+2. Filter to embedding-capable models:
+   - Name contains "embed" or "embedding"
+   - Or model metadata indicates embedding capability
+3. Return list with model ID and dimensions (if known)
+4. Support both Ollama and OpenAI-compatible (LM Studio) formats
+
+**Ollama Response Format:**
+```json
+{
+  "models": [
+    { "name": "nomic-embed-text:v2", "size": 274000000 }
+  ]
+}
+```
+
+**LM Studio Response Format (OpenAI-compatible):**
+```json
+{
+  "data": [
+    { "id": "text-embedding-nomic-embed-text-v1.5", "object": "model" }
+  ]
+}
+```
+
+**Priority:** P0 (Must Have)
+**Traces To:** US-051
+
+---
+
+#### FR-046: Model Selection Interface
+The system SHALL provide an interface for embedding model selection.
+
+**Behavior:**
+1. Display detected providers and status
+2. List available embedding models from active provider
+3. Show current selection
+4. Allow selection by number or name
+5. Persist selection to configuration file
+6. Warn if changing models requires re-embedding
+
+**Re-embedding Warning:**
+When model changes:
+- Count existing memories with embeddings
+- Estimate re-embedding time (memories / 10 per second)
+- Require explicit confirmation
+- Perform re-embedding in background
+
+**Configuration Persistence:**
+```json
+{
+  "embedding": {
+    "provider": "lmstudio",
+    "endpoint": "http://localhost:1234",
+    "model": "text-embedding-qwen3-embedding-8b",
+    "dimensions": 4096
+  }
+}
+```
+
+**Priority:** P1 (Should Have)
+**Traces To:** US-052
+
+---
+
+#### FR-047: Model Validation
+The system SHALL validate embedding model configuration.
+
+**Behavior:**
+1. On model selection, generate test embedding for sample text
+2. Verify response contains valid vector
+3. Detect and store dimension count
+4. Report validation success/failure
+5. On failure, suggest available alternatives
+
+**Test Payload:**
+```
+"Test embedding for claude-memory configuration validation"
+```
+
+**Validation Checks:**
+- Response received within 5 seconds
+- Response contains embedding array
+- Embedding has consistent dimensions
+- No error in response
+
+**Priority:** P1 (Should Have)
+**Traces To:** US-053
 
 ---
 

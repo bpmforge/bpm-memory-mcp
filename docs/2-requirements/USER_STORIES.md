@@ -554,6 +554,151 @@ To enable semantic search, run: ollama serve
 
 ---
 
+### US-050: Provider Auto-Detection
+**As a** developer,
+**I want** claude-memory to auto-detect available embedding providers,
+**So that** setup is automatic and I don't have to manually configure endpoints.
+
+**Priority:** P0 *(NEW)*
+**Traces To:** FR-044
+
+**Acceptance Criteria:**
+- [ ] Check Ollama at localhost:11434 on startup
+- [ ] Check LM Studio at localhost:1234 on startup
+- [ ] Use first available provider automatically
+- [ ] Support custom endpoints via config override
+- [ ] Cache detection result for session
+
+**Example:**
+```
+Embedding provider detected: LM Studio (http://127.0.0.1:1234)
+```
+
+**Story Points:** 3
+
+**AI Analysis:** NEW - HIGH VALUE. Zero-config is critical for adoption. Users shouldn't need to know which port their embedding server uses.
+
+---
+
+### US-051: Model Discovery
+**As a** developer,
+**I want** to see available embedding models on my local providers,
+**So that** I can choose the best one for my needs.
+
+**Priority:** P0 *(NEW)*
+**Traces To:** FR-045
+
+**Acceptance Criteria:**
+- [ ] Query provider's /v1/models endpoint
+- [ ] Filter to embedding-capable models (by name pattern or capability)
+- [ ] Display model name, dimensions if known
+- [ ] Show currently selected model
+- [ ] Support both Ollama and LM Studio API formats
+
+**Example:**
+```
+Available embedding models on LM Studio:
+  1. text-embedding-nomic-embed-text-v1.5 (768 dims)
+  2. text-embedding-qwen3-embedding-8b (4096 dims)
+
+Current: text-embedding-nomic-embed-text-v1.5
+```
+
+**Story Points:** 3
+
+**AI Analysis:** NEW - HIGH VALUE. Users need visibility into what's available. Without this, they're guessing model names.
+
+---
+
+### US-052: Interactive Model Selection
+**As a** developer,
+**I want** an easy way to select which embedding model to use,
+**So that** I can optimize for my hardware and quality needs without editing JSON.
+
+**Priority:** P1 *(NEW)*
+**Traces To:** FR-046
+
+**Acceptance Criteria:**
+- [ ] Skill command `/memory config` or MCP tool for configuration
+- [ ] List detected providers and their status
+- [ ] List available models from active provider
+- [ ] Allow selection by number or name
+- [ ] Persist selection to config file
+- [ ] Warn if switching models (existing embeddings become incompatible)
+
+**Example:**
+```
+> /memory config
+
+Embedding Configuration
+═══════════════════════════════════════
+
+Detected Providers:
+  ✓ LM Studio (http://127.0.0.1:1234)
+  ✗ Ollama (not running)
+
+Available Embedding Models:
+  1. text-embedding-nomic-embed-text-v1.5 (768 dims)
+  2. text-embedding-qwen3-embedding-8b (4096 dims)
+
+Current: text-embedding-nomic-embed-text-v1.5
+
+Select model [1-2] or press Enter to keep current: 2
+
+⚠ Warning: Changing models will require re-embedding all memories.
+  Existing: 47 memories (estimated 2 minutes to re-embed)
+
+Proceed? [y/N]: y
+
+Model changed to: text-embedding-qwen3-embedding-8b
+Re-embedding in background... (use /memory status to check progress)
+```
+
+**Story Points:** 5
+
+**AI Analysis:** NEW - HIGH VALUE. Config UX matters. Editing JSON files is error-prone and unfriendly. Interactive selection with warnings about re-embedding is the right approach.
+
+---
+
+### US-053: Model Validation on Setup
+**As a** developer,
+**I want** the system to validate my model choice works,
+**So that** I don't get runtime errors during actual use.
+
+**Priority:** P1 *(NEW)*
+**Traces To:** FR-047
+
+**Acceptance Criteria:**
+- [ ] Test embedding generation with sample text on model selection
+- [ ] Verify response includes valid vector
+- [ ] Detect and report dimension count
+- [ ] Warn if model not found or returns error
+- [ ] Suggest alternatives from discovered models
+
+**Example (success):**
+```
+Testing model: text-embedding-qwen3-embedding-8b
+✓ Model responded in 145ms
+✓ Vector dimensions: 4096
+✓ Model validated successfully
+```
+
+**Example (failure):**
+```
+Testing model: nomic-embed-text-v99
+✗ Model not found
+
+Available models:
+  - text-embedding-nomic-embed-text-v1.5
+  - text-embedding-qwen3-embedding-8b
+```
+
+**Story Points:** 3
+
+**AI Analysis:** NEW - HIGH VALUE. Fail fast principle. Better to catch config errors during setup than during actual memory operations.
+
+---
+
 ## Epic 6: Knowledge Graph
 
 ### US-024: Track Code Entities
@@ -1156,10 +1301,10 @@ User: "That's outdated, we use Fastify now"
 
 | Priority | Count | Story Points |
 |----------|-------|--------------|
-| P0 (Must Have) | 27 | 134 |
-| P1 (Should Have) | 12 | 53 |
+| P0 (Must Have) | 29 | 140 |
+| P1 (Should Have) | 14 | 61 |
 | P2 (Nice to Have) | 10 | 36 |
-| **Total** | **49** | **223** |
+| **Total** | **53** | **237** |
 
 ### By Epic
 
@@ -1169,7 +1314,7 @@ User: "That's outdated, we use Fastify now"
 | 2. Memory Storage | 6 | 24 |
 | 3. Memory Types | 6 | 28 |
 | 4. Hybrid Search | 3 | 16 |
-| 5. Embeddings | 3 | 11 |
+| 5. Embeddings | 7 | 25 |
 | 6. Knowledge Graph | 3 | 18 |
 | 7. Context Engineering | 4 | 19 |
 | 8. Session Management | 3 | 13 |
@@ -1177,7 +1322,7 @@ User: "That's outdated, we use Fastify now"
 | 10. Storage & Config | 4 | 14 |
 | 11. Plugin Distribution | 3 | 11 |
 | 12. Hook Automation | 2 | 6 |
-| 13. Memory Quality (NEW) | 4 | 18 |
+| 13. Memory Quality | 4 | 18 |
 
 ---
 
@@ -1211,6 +1356,10 @@ User: "That's outdated, we use Fastify now"
 | US-047: Validate on Recall | P1 | Citations only useful if verified current |
 | US-048: Confidence Decay | P1 | Learn from wrong recalls |
 | US-049: Session Start Diff | P2 | Proactive staleness awareness |
+| US-050: Provider Auto-Detection | P0 | Zero-config setup - auto-detect Ollama or LM Studio |
+| US-051: Model Discovery | P0 | Visibility into available embedding models |
+| US-052: Interactive Model Selection | P1 | Easy UX for model selection without editing JSON |
+| US-053: Model Validation | P1 | Fail-fast validation of model configuration |
 
 ---
 
@@ -1267,6 +1416,10 @@ User: "That's outdated, we use Fastify now"
 | US-047 | FR-011 |
 | US-048 | FR-023 |
 | US-049 | FR-071 |
+| US-050 | FR-044 |
+| US-051 | FR-045 |
+| US-052 | FR-046 |
+| US-053 | FR-047 |
 
 ---
 
