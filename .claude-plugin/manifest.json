@@ -1,0 +1,96 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/plugin-manifest.json",
+  "name": "claude-memory",
+  "version": "1.0.0",
+  "description": "Persistent intelligent memory for Claude Code with hybrid search, local embeddings, and context management",
+  "author": "claude-memory contributors",
+  "license": "MIT",
+  "repository": "https://github.com/anthropics/claude-memory",
+  "keywords": ["memory", "embeddings", "search", "context", "mcp"],
+  "engines": {
+    "node": ">=22.0.0",
+    "claude-code": ">=1.0.0"
+  },
+  "components": {
+    "mcp": {
+      "server": "mcp/memory-server/dist/index.js",
+      "tools": [
+        {
+          "name": "memory_store",
+          "description": "Store a memory with embedding and optional entity extraction"
+        },
+        {
+          "name": "memory_recall",
+          "description": "Search memories using hybrid vector + keyword search"
+        },
+        {
+          "name": "memory_forget",
+          "description": "Soft-delete a memory with reason tracking"
+        },
+        {
+          "name": "memory_update",
+          "description": "Update memory content and re-embed"
+        },
+        {
+          "name": "session_save",
+          "description": "Persist current session state"
+        },
+        {
+          "name": "session_restore",
+          "description": "Load previous session state"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "memory://stats",
+          "name": "Memory Statistics",
+          "description": "Memory system statistics and health"
+        }
+      ]
+    },
+    "skills": [
+      {
+        "name": "memory",
+        "path": "skills/memory/SKILL.md",
+        "description": "Teaches Claude when and how to use memory effectively"
+      }
+    ],
+    "hooks": {
+      "settings": "hooks/settings.json"
+    }
+  },
+  "configuration": {
+    "dataDir": "~/.claude-memory",
+    "embedding": {
+      "providers": ["ollama", "lmstudio"],
+      "defaultModel": "nomic-embed-text",
+      "autoDetect": true
+    },
+    "search": {
+      "vectorWeight": 0.5,
+      "bm25Weight": 0.5,
+      "rrfK": 60
+    }
+  },
+  "install": {
+    "preInstall": "npm install",
+    "build": "npm run build",
+    "postInstall": "echo 'Claude Memory plugin installed successfully'"
+  },
+  "requirements": {
+    "optional": [
+      {
+        "name": "Ollama",
+        "description": "Local LLM server for embeddings",
+        "url": "https://ollama.ai",
+        "check": "curl -s http://localhost:11434/api/tags"
+      },
+      {
+        "name": "LM Studio",
+        "description": "Alternative local embedding server",
+        "url": "https://lmstudio.ai",
+        "check": "curl -s http://localhost:1234/v1/models"
+      }
+    ]
+  }
+}

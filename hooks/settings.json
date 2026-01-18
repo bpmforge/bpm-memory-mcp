@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/hooks-settings.json",
+  "description": "Claude Memory plugin hook configurations",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "description": "Restore session on conversation start",
+        "matcher": "SessionStart",
+        "command": "./hooks/session-restore.sh",
+        "timeout": 5000
+      }
+    ],
+    "PostToolUse": [
+      {
+        "description": "Track errors for memory storage",
+        "matcher": "Bash|Write|Edit",
+        "command": "./hooks/error-tracker.sh \"$TOOL_RESULT\"",
+        "timeout": 2000,
+        "onError": "continue"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "description": "Auto-save session on conversation end",
+        "command": "./hooks/session-save.sh",
+        "timeout": 5000
+      }
+    ]
+  }
+}

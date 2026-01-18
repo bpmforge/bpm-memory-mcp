@@ -8,6 +8,13 @@ import { rrfFusion, interleave } from './rrf.js';
 export { VectorSearch, cosineSimilarity, normalizeVector } from './vector.js';
 export { BM25Search } from './bm25.js';
 export { rrfFusion, interleave } from './rrf.js';
+export {
+  rerankResults,
+  filterByRecency,
+  filterByConfidence,
+  boostByType,
+  diversifyResults,
+} from './rerank.js';
 
 /**
  * Hybrid search service combining vector and BM25 search

@@ -8,6 +8,15 @@ export { OllamaProvider, createOllamaProvider } from './ollama.js';
 export { LMStudioProvider, createLMStudioProvider } from './lmstudio.js';
 export { detectProviders, getProvider, checkProviderStatus, listAllModels } from './discovery.js';
 export { EmbeddingCache } from './cache.js';
+export { validateModel, validateModels, findBestModel } from './validation.js';
+export {
+  loadConfig,
+  saveConfig,
+  listAvailableModels,
+  selectModel,
+  autoConfigureModel,
+  getConfigStatus,
+} from './config.js';
 
 /**
  * Embedding service with provider management and caching

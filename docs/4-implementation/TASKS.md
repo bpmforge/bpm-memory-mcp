@@ -14,9 +14,9 @@
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| Done | 28 | 74% |
+| Done | 38 | 100% |
 | Partial | 0 | 0% |
-| Pending | 10 | 26% |
+| Pending | 0 | 0% |
 
 ### P0 Tasks (28 total)
 - **Done:** 28 (100%)
@@ -24,12 +24,12 @@
 - **Pending:** 0 (0%)
 
 ### P1 Tasks (10 total)
-- **Done:** 0 (0%)
+- **Done:** 10 (100%)
 - **Partial:** 0 (0%)
-- **Pending:** 10 (100%)
+- **Pending:** 0 (0%)
 
 ### Confidence Distribution
-- 🟢 High (90%+): 28 tasks
+- 🟢 High (90%+): 38 tasks
 - 🟡 Medium (70-89%): 0 tasks
 - 🟠 Low (40-69%): 0 tasks
 
@@ -101,16 +101,16 @@
 | TASK-026 | Project Identification | storage | P0 | Done | 95% | FR-080, FR-081 |
 | TASK-027 | Core Memory Blocks (MemGPT-style) | storage | P0 | Done | 90% | FR-021 |
 | TASK-028 | SKILL.md Memory Skill | skill | P0 | Done | 95% | SK-001 |
-| TASK-029 | Model Validation | embeddings | P1 | Pending | - | FR-047 |
-| TASK-030 | Model Selection Interface | embeddings | P1 | Pending | - | FR-046 |
-| TASK-031 | Search Re-ranking | search | P1 | Pending | - | FR-033 |
-| TASK-032 | Entity Management | graph | P1 | Pending | - | FR-050 |
-| TASK-033 | Relationship Management | graph | P1 | Pending | - | FR-051 |
-| TASK-034 | graph_query Tool | graph | P1 | Pending | - | FR-053, MCP-002 |
-| TASK-035 | Session Hooks Configuration | hooks | P1 | Pending | - | HK-001, HK-005 |
-| TASK-036 | Project Switch Hook | hooks | P1 | Pending | - | HK-006 |
-| TASK-037 | compact.sh Script | skill | P1 | Pending | - | SK-002, FR-060 |
-| TASK-038 | Plugin Manifest & Installation | core | P1 | Pending | - | PL-001, PL-002 |
+| TASK-029 | Model Validation | embeddings | P1 | Done | 90% | FR-047 |
+| TASK-030 | Model Selection Interface | embeddings | P1 | Done | 90% | FR-046 |
+| TASK-031 | Search Re-ranking | search | P1 | Done | 90% | FR-033 |
+| TASK-032 | Entity Management | graph | P1 | Done | 90% | FR-050 |
+| TASK-033 | Relationship Management | graph | P1 | Done | 90% | FR-051 |
+| TASK-034 | graph_query Tool | graph | P1 | Done | 85% | FR-053, MCP-002 |
+| TASK-035 | Session Hooks Configuration | hooks | P1 | Done | 90% | HK-001, HK-005 |
+| TASK-036 | Project Switch Hook | hooks | P1 | Done | 90% | HK-006 |
+| TASK-037 | compact.sh Script | skill | P1 | Done | 90% | SK-002, FR-060 |
+| TASK-038 | Plugin Manifest & Installation | core | P1 | Done | 95% | PL-001, PL-002 |
 
 ---
 
