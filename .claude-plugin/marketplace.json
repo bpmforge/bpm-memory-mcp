@@ -1,0 +1,62 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/marketplace-listing.json",
+  "name": "claude-memory",
+  "displayName": "Claude Memory",
+  "description": "Persistent intelligent memory for Claude Code with hybrid search, local embeddings, and context management",
+  "longDescription": "A hybrid Claude Code plugin that provides persistent intelligent memory through the optimal combination of Skills, MCP Server, and Hooks.\n\n## Features\n\n- **Hybrid Search**: Combines vector similarity and BM25 keyword search with RRF fusion for best-of-both-worlds retrieval\n- **Local Embeddings**: Privacy-first with Ollama or LM Studio - your data never leaves your machine\n- **Knowledge Graph**: Bi-temporal entity tracking for understanding code relationships\n- **Session Management**: Automatic save/restore of conversation context\n- **Memory Types**: Facts, patterns, decisions, errors, and preferences with type-aware retrieval\n- **75% Lower Token Overhead**: Skill-based approach reduces context bloat compared to pure MCP solutions\n\n## Use Cases\n\n- Remember architectural decisions across sessions\n- Track error solutions to avoid repeating fixes\n- Build project-specific knowledge over time\n- Maintain context during long refactoring sessions\n- Share learned patterns between team members",
+  "version": "1.0.0",
+  "author": {
+    "name": "claude-memory contributors",
+    "url": "https://github.com/anthropics/claude-memory"
+  },
+  "repository": "https://github.com/anthropics/claude-memory",
+  "license": "MIT",
+  "categories": ["productivity", "memory", "search", "ai"],
+  "tags": [
+    "memory",
+    "embeddings",
+    "search",
+    "context",
+    "mcp",
+    "ollama",
+    "lmstudio",
+    "knowledge-graph",
+    "session-management"
+  ],
+  "requirements": {
+    "claudeCode": ">=1.0.0",
+    "node": ">=22.0.0"
+  },
+  "optionalDependencies": [
+    {
+      "name": "Ollama",
+      "description": "Local LLM server for generating embeddings",
+      "url": "https://ollama.ai",
+      "installCommand": "curl -fsSL https://ollama.ai/install.sh | sh && ollama pull nomic-embed-text"
+    },
+    {
+      "name": "LM Studio",
+      "description": "Alternative local embedding server with GUI",
+      "url": "https://lmstudio.ai"
+    }
+  ],
+  "screenshots": [],
+  "installInstructions": "## Quick Install\n\n```bash\ngit clone https://github.com/anthropics/claude-memory\ncd claude-memory\n./install.sh\n```\n\n## Manual Install\n\n1. Clone the repository\n2. Run `npm install && npm run build`\n3. Add MCP server to your Claude Code settings\n4. Install Ollama and pull nomic-embed-text model\n\nSee README.md for detailed instructions.",
+  "pricing": {
+    "type": "free"
+  },
+  "stats": {
+    "downloads": 0,
+    "rating": 0,
+    "reviews": 0
+  },
+  "lastUpdated": "2026-01-18",
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "architectures": ["x64", "arm64"]
+  },
+  "support": {
+    "issues": "https://github.com/anthropics/claude-memory/issues",
+    "discussions": "https://github.com/anthropics/claude-memory/discussions"
+  }
+}
