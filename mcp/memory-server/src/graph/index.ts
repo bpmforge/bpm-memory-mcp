@@ -6,6 +6,8 @@ import { RelationRepository } from './relations.js';
 
 export { EntityRepository } from './entities.js';
 export { RelationRepository } from './relations.js';
+export { MemoryGraphService } from './memory-graph.js';
+export type { MemoryGraphStats, ContradictionPair, MemoryChain, MemoryCluster } from './memory-graph.js';
 
 export interface SubgraphResult {
   entities: Entity[];

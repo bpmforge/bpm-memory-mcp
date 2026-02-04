@@ -41,6 +41,7 @@ import { MemoryLinkRepository } from './storage/links.js';
 import { CheckpointRepository } from './checkpoint/index.js';
 import { ContradictionDetector } from './validation/contradictions.js';
 import { AutoLinker } from './linking/index.js';
+import { MemoryGraphService } from './graph/index.js';
 
 // Storage quota: maximum memories per project
 const MAX_MEMORIES_PER_PROJECT = 10000;
@@ -67,6 +68,8 @@ let contradictionDetector: ContradictionDetector | null = null;
 let lastGoalCheck: Date | null = null;
 // V4 services for automatic linking
 let autoLinker: AutoLinker | null = null;
+// V5 services for graph queries
+let memoryGraphService: MemoryGraphService | null = null;
 
 /**
  * Initialize services for a project
@@ -98,6 +101,8 @@ async function initializeForProject(projectId: string): Promise<void> {
   contradictionDetector = new ContradictionDetector(db);
   // V4 services
   autoLinker = new AutoLinker(db);
+  // V5 services
+  memoryGraphService = new MemoryGraphService(db);
 
   // Initialize core memory if needed
   if (!coreMemoryRepository.isInitialized(projectId)) {
@@ -279,14 +284,14 @@ function createServer(): Server {
       },
       {
         name: 'memory_link',
-        description: 'Create Zettelkasten-style links between memories',
+        description: 'Create and query Zettelkasten-style links between memories. Supports graph queries for contradictions, chains, clusters, and statistics.',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['create', 'find_related', 'get_links'],
-              description: 'Action to perform',
+              enum: ['create', 'find_related', 'get_links', 'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans'],
+              description: 'Action: create/find_related/get_links (basic), get_stats/find_contradictions/find_chain/find_cluster/find_orphans (graph queries)',
             },
             sourceId: { type: 'string', format: 'uuid', description: 'Source memory ID (for "create")' },
             targetId: { type: 'string', format: 'uuid', description: 'Target memory ID (for "create")' },
@@ -297,8 +302,18 @@ function createServer(): Server {
             },
             strength: { type: 'number', minimum: 0, maximum: 1, description: 'Link strength 0-1' },
             bidirectional: { type: 'boolean', description: 'Whether link works both directions' },
-            memoryId: { type: 'string', format: 'uuid', description: 'Memory ID (for "find_related"/"get_links")' },
-            depth: { type: 'integer', minimum: 1, maximum: 3, description: 'Traversal depth for "find_related"' },
+            memoryId: { type: 'string', format: 'uuid', description: 'Memory ID (for find_related/get_links/find_chain/find_cluster)' },
+            depth: { type: 'integer', minimum: 1, maximum: 3, description: 'Traversal depth' },
+            linkTypes: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Link types to follow for find_chain (default: extends, derived_from, supports)',
+            },
+            direction: {
+              type: 'string',
+              enum: ['forward', 'backward', 'both'],
+              description: 'Chain traversal direction (default: both)',
+            },
           },
           required: ['action'],
         },
@@ -744,6 +759,39 @@ function createServer(): Server {
           );
           lastGoalCheck = new Date();
 
+          // V5: Proactive context assembly
+          let proactiveContext: {
+            graphStats: { totalMemories: number; linkedMemories: number; contradictionCount: number } | null;
+            recentContradictions: Array<{ source: string; target: string }>;
+            incompleteCheckpoints: Array<{ taskId: string; phase: string; pendingSteps: number }>;
+          } | null = null;
+
+          if (memoryGraphService && !HARDENING_DISABLED) {
+            const graphStats = memoryGraphService.getStats(projectId);
+            const contradictions = memoryGraphService.findContradictions(projectId);
+            const checkpoints = checkpointRepository?.listCheckpoints(projectId, { limit: 5 }) ?? [];
+            const incompleteCheckpoints = checkpoints
+              .filter((c) => c.pendingSteps.length > 0)
+              .slice(0, 3);
+
+            proactiveContext = {
+              graphStats: {
+                totalMemories: graphStats.totalMemories,
+                linkedMemories: graphStats.linkedMemories,
+                contradictionCount: graphStats.contradictionCount,
+              },
+              recentContradictions: contradictions.slice(0, 3).map((c) => ({
+                source: c.source.content.substring(0, 50) + '...',
+                target: c.target.content.substring(0, 50) + '...',
+              })),
+              incompleteCheckpoints: incompleteCheckpoints.map((c) => ({
+                taskId: c.taskId,
+                phase: c.phase,
+                pendingSteps: c.pendingSteps.length,
+              })),
+            };
+          }
+
           return {
             content: [
               {
@@ -765,6 +813,8 @@ function createServer(): Server {
                   })),
                   driftIndicator: driftResult.indicator,
                   driftWarning: driftResult.isWarning ? getDriftWarningMessage(driftResult) : null,
+                  // V5 proactive context
+                  proactiveContext,
                   message: 'Session restored successfully',
                 }),
               },
@@ -1061,6 +1111,179 @@ function createServer(): Server {
                         direction: l.sourceId === input.memoryId ? 'outgoing' : 'incoming',
                       })),
                       totalLinks: links.length,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            // V5: Graph query actions
+            case 'get_stats': {
+              if (!memoryGraphService) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Graph service not initialized' }],
+                  isError: true,
+                };
+              }
+
+              const stats = memoryGraphService.getStats(projectId);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      ...stats,
+                      message: 'Graph statistics retrieved',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'find_contradictions': {
+              if (!memoryGraphService) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Graph service not initialized' }],
+                  isError: true,
+                };
+              }
+
+              const contradictions = memoryGraphService.findContradictions(projectId);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      contradictions: contradictions.map((c) => ({
+                        linkId: c.linkId,
+                        source: c.source,
+                        target: c.target,
+                        createdAt: c.createdAt.toISOString(),
+                      })),
+                      count: contradictions.length,
+                      message: contradictions.length > 0
+                        ? `Found ${contradictions.length} contradiction(s) to review`
+                        : 'No contradictions found',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'find_chain': {
+              if (!memoryGraphService) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Graph service not initialized' }],
+                  isError: true,
+                };
+              }
+
+              if (!input.memoryId) {
+                return {
+                  content: [{ type: 'text', text: 'Error: memoryId is required for "find_chain" action' }],
+                  isError: true,
+                };
+              }
+
+              const chainOptions: {
+                linkTypes?: string[];
+                maxLength?: number;
+                direction?: 'forward' | 'backward' | 'both';
+              } = {};
+              if (input.linkTypes) chainOptions.linkTypes = input.linkTypes as string[];
+              if (input.depth) chainOptions.maxLength = input.depth;
+              if (input.direction) chainOptions.direction = input.direction as 'forward' | 'backward' | 'both';
+
+              const chain = memoryGraphService.findChain(input.memoryId, projectId, chainOptions);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      startId: chain.startId,
+                      nodes: chain.nodes.map((n) => ({
+                        id: n.id,
+                        content: n.content.length > 100 ? n.content.substring(0, 100) + '...' : n.content,
+                        type: n.type,
+                        linkType: n.linkType,
+                        createdAt: n.createdAt.toISOString(),
+                      })),
+                      length: chain.length,
+                      message: chain.length > 1
+                        ? `Found chain of ${chain.length} connected memories`
+                        : 'No connected memories found in chain',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'find_cluster': {
+              if (!memoryGraphService) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Graph service not initialized' }],
+                  isError: true,
+                };
+              }
+
+              if (!input.memoryId) {
+                return {
+                  content: [{ type: 'text', text: 'Error: memoryId is required for "find_cluster" action' }],
+                  isError: true,
+                };
+              }
+
+              const clusterOptions: { maxSize?: number; maxDepth?: number } = {};
+              if (input.depth) clusterOptions.maxDepth = input.depth;
+
+              const cluster = memoryGraphService.findCluster(input.memoryId, projectId, clusterOptions);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      centerId: cluster.centerId,
+                      centerContent: cluster.centerContent,
+                      members: cluster.members,
+                      size: cluster.size,
+                      message: cluster.size > 1
+                        ? `Found cluster of ${cluster.size} memories`
+                        : 'Memory has no links',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'find_orphans': {
+              if (!memoryGraphService) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Graph service not initialized' }],
+                  isError: true,
+                };
+              }
+
+              const orphans = memoryGraphService.findOrphans(projectId);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      orphans: orphans.map((o) => ({
+                        id: o.id,
+                        content: o.content,
+                        type: o.type,
+                        createdAt: o.createdAt.toISOString(),
+                      })),
+                      count: orphans.length,
+                      message: orphans.length > 0
+                        ? `Found ${orphans.length} unlinked memories. Consider linking them for better recall.`
+                        : 'All memories are linked',
                     }),
                   },
                 ],

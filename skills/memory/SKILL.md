@@ -185,6 +185,49 @@ memory_link({
 | `extends` | Builds upon or adds detail |
 | `derived_from` | Based on or concluded from |
 
+## V5 Graph Queries
+
+Advanced queries on the memory graph via `memory_link` actions:
+
+**Get graph statistics:**
+```
+memory_link({ action: "get_stats" })
+// Returns: totalMemories, linkedMemories, contradictionCount, mostConnected
+```
+
+**Find all contradictions:**
+```
+memory_link({ action: "find_contradictions" })
+// Returns pairs of contradicting memories for review
+```
+
+**Trace decision chains:**
+```
+memory_link({
+  action: "find_chain",
+  memoryId: "uuid",
+  linkTypes: ["extends", "derived_from"],  // optional
+  direction: "both"  // forward, backward, or both
+})
+// Returns evolution of decisions/knowledge
+```
+
+**Find memory clusters:**
+```
+memory_link({
+  action: "find_cluster",
+  memoryId: "uuid",
+  depth: 2
+})
+// Returns related memories grouped around center
+```
+
+**Find orphan memories:**
+```
+memory_link({ action: "find_orphans" })
+// Returns unlinked memories that should be connected
+```
+
 ## Task Checkpoints
 
 Save and restore task progress for complex multi-step work.

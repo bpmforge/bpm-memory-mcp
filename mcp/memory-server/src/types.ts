@@ -446,14 +446,21 @@ export const GoalAnchorInputSchema = z.object({
 });
 
 export const MemoryLinkInputSchema = z.object({
-  action: z.enum(['create', 'find_related', 'get_links']),
+  action: z.enum([
+    'create', 'find_related', 'get_links',
+    // V5: Graph query actions
+    'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans'
+  ]),
   sourceId: z.string().uuid().optional(),
   targetId: z.string().uuid().optional(),
   linkType: MemoryLinkTypeSchema.optional(),
   strength: z.number().min(0).max(1).optional().default(1.0),
   bidirectional: z.boolean().optional().default(false),
-  memoryId: z.string().uuid().optional(), // For find_related and get_links
+  memoryId: z.string().uuid().optional(), // For find_related, get_links, find_chain, find_cluster
   depth: z.number().int().min(1).max(3).optional().default(2),
+  // V5: Chain traversal options
+  linkTypes: z.array(z.string()).optional(), // Link types to follow for find_chain
+  direction: z.enum(['forward', 'backward', 'both']).optional(), // Chain direction
 });
 
 export const CheckpointTaskInputSchema = z.object({

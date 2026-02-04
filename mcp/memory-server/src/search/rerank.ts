@@ -222,3 +222,85 @@ export function diversifyResults(
 
   return diversified;
 }
+
+/**
+ * V5: Apply time-based confidence decay
+ * Adjusts effective confidence based on memory age and type
+ * This is non-destructive - original confidence is preserved
+ */
+export interface ConfidenceDecayOptions {
+  /** Base half-life in days for confidence decay (default: 90) */
+  halfLifeDays?: number;
+  /** Type-specific half-life multipliers */
+  typeMultipliers?: Partial<Record<MemoryType, number>>;
+  /** Minimum effective confidence (default: 0.1) */
+  minConfidence?: number;
+  /** Reference time (default: now) */
+  now?: Date;
+}
+
+const DEFAULT_TYPE_MULTIPLIERS: Record<MemoryType, number> = {
+  fact: 4.0,       // Facts decay slowest (360 day half-life)
+  pattern: 3.0,    // Patterns persist (270 days)
+  decision: 1.5,   // Decisions moderate (135 days)
+  preference: 1.0, // Preferences baseline (90 days)
+  error: 0.5,      // Errors decay faster (45 days)
+  goal: 0.3,       // Goals decay fast (27 days)
+  checkpoint: 0.1, // Checkpoints decay fastest (9 days)
+};
+
+/**
+ * Calculate decayed confidence for a memory
+ */
+export function calculateDecayedConfidence(
+  originalConfidence: number,
+  createdAt: Date,
+  memoryType: MemoryType,
+  options: ConfidenceDecayOptions = {}
+): number {
+  const {
+    halfLifeDays = 90,
+    typeMultipliers = {},
+    minConfidence = 0.1,
+    now = new Date(),
+  } = options;
+
+  const multiplier = typeMultipliers[memoryType] ?? DEFAULT_TYPE_MULTIPLIERS[memoryType] ?? 1.0;
+  const effectiveHalfLife = halfLifeDays * multiplier;
+
+  const ageMs = now.getTime() - createdAt.getTime();
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+
+  // Exponential decay: C(t) = C0 * 2^(-t/halflife)
+  const decayFactor = Math.pow(2, -ageDays / effectiveHalfLife);
+  const decayedConfidence = originalConfidence * decayFactor;
+
+  return Math.max(minConfidence, decayedConfidence);
+}
+
+/**
+ * Apply confidence decay to search results
+ */
+export function applyConfidenceDecay(
+  results: MemorySearchResult[],
+  options: ConfidenceDecayOptions = {}
+): MemorySearchResult[] {
+  return results.map((result) => {
+    const decayedConfidence = calculateDecayedConfidence(
+      result.memory.confidence,
+      result.memory.createdAt,
+      result.memory.type,
+      options
+    );
+
+    return {
+      ...result,
+      memory: {
+        ...result.memory,
+        // Store decayed confidence in a way that doesn't overwrite original
+        confidence: decayedConfidence,
+      },
+      _originalConfidence: result.memory.confidence,
+    };
+  });
+}
