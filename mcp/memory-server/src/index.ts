@@ -40,6 +40,7 @@ import { calculateDriftIndicator, getDriftWarningMessage } from './goals/drift.j
 import { MemoryLinkRepository } from './storage/links.js';
 import { CheckpointRepository } from './checkpoint/index.js';
 import { ContradictionDetector } from './validation/contradictions.js';
+import { AutoLinker } from './linking/index.js';
 
 // Storage quota: maximum memories per project
 const MAX_MEMORIES_PER_PROJECT = 10000;
@@ -64,6 +65,8 @@ let memoryLinkRepository: MemoryLinkRepository | null = null;
 let checkpointRepository: CheckpointRepository | null = null;
 let contradictionDetector: ContradictionDetector | null = null;
 let lastGoalCheck: Date | null = null;
+// V4 services for automatic linking
+let autoLinker: AutoLinker | null = null;
 
 /**
  * Initialize services for a project
@@ -93,6 +96,8 @@ async function initializeForProject(projectId: string): Promise<void> {
   memoryLinkRepository = new MemoryLinkRepository(db);
   checkpointRepository = new CheckpointRepository(db);
   contradictionDetector = new ContradictionDetector(db);
+  // V4 services
+  autoLinker = new AutoLinker(db);
 
   // Initialize core memory if needed
   if (!coreMemoryRepository.isInitialized(projectId)) {
@@ -443,6 +448,38 @@ function createServer(): Server {
 
           const memory = memoryRepository.createMemory(memoryInput, embedding, projectRoot);
 
+          // V4: Auto-link to related memories
+          let autoLinkResult: {
+            created: number;
+            links: Array<{ targetId: string; linkType: string; strength: number }>;
+            suggestions: Array<{ targetId: string; similarity: number; reason: string }>;
+          } | null = null;
+
+          if (autoLinker && embedding && !HARDENING_DISABLED) {
+            const linkResult = await autoLinker.processNewMemory(
+              memory.id,
+              memory.content,
+              embedding,
+              projectId
+            );
+
+            if (linkResult.createdLinks.length > 0 || linkResult.suggestedLinks.length > 0) {
+              autoLinkResult = {
+                created: linkResult.createdLinks.length,
+                links: linkResult.createdLinks.map((l) => ({
+                  targetId: l.targetId,
+                  linkType: l.linkType,
+                  strength: l.strength,
+                })),
+                suggestions: linkResult.suggestedLinks.slice(0, 3).map((s) => ({
+                  targetId: s.targetId,
+                  similarity: s.similarity,
+                  reason: s.reason,
+                })),
+              };
+            }
+          }
+
           return {
             content: [
               {
@@ -457,6 +494,8 @@ function createServer(): Server {
                   version: memory.version,
                   // V3 response fields
                   contradictionWarning,
+                  // V4 response fields
+                  autoLinks: autoLinkResult,
                 }),
               },
             ],

@@ -209,9 +209,48 @@ checkpoint_task({
 })
 ```
 
-## Automatic Memory Extraction
+## V4 Automation Features
 
-### When to Store Automatically
+### Automatic Linking
+When you call `memory_store`, related memories are automatically linked:
+
+**Response includes:**
+```json
+{
+  "id": "new-memory-uuid",
+  "autoLinks": {
+    "created": 2,
+    "links": [
+      { "targetId": "uuid-1", "linkType": "relates_to", "strength": 0.85 },
+      { "targetId": "uuid-2", "linkType": "relates_to", "strength": 0.78 }
+    ],
+    "suggestions": [
+      { "targetId": "uuid-3", "similarity": 0.65, "reason": "68% similar, shared topics: auth, jwt" }
+    ]
+  }
+}
+```
+
+- Links created automatically for >75% similarity
+- Suggestions provided for 60-75% similarity
+- Use `memory_link` to accept suggestions or create manual links
+
+### Hook-Based Reminders
+The system includes hooks that prompt you to:
+
+**Memory extraction** (after Write/Edit/Bash):
+- Store decisions when making significant choices
+- Store errors when solving bugs
+- Store patterns when recognizing approaches
+
+**Goal checking** (after code changes):
+- Check drift alignment periodically
+- Refocus when drift indicator > 0.7
+- Verify goals before architectural decisions
+
+### Automatic Memory Extraction
+
+**When to Store Automatically:**
 - User says "let's use X" or "we'll go with Y" -> decision
 - Error solved -> error memory with solution
 - User establishes objectives -> `goal_anchor` immediately

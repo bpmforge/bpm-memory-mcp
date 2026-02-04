@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/hooks-settings.json",
-  "description": "Claude Memory plugin hook configurations",
+  "description": "Claude Memory plugin hook configurations - V4 with automation",
   "hooks": {
     "PreToolUse": [
       {
@@ -16,6 +16,20 @@
         "matcher": "Bash|Write|Edit",
         "command": "./hooks/error-tracker.sh \"$TOOL_RESULT\"",
         "timeout": 2000,
+        "onError": "continue"
+      },
+      {
+        "description": "Suggest memory extraction after significant operations",
+        "matcher": "Write|Edit|Bash",
+        "command": "./hooks/memory-extract.sh \"$TOOL_NAME\" \"$TOOL_RESULT\"",
+        "timeout": 2000,
+        "onError": "continue"
+      },
+      {
+        "description": "Check goal alignment after code changes",
+        "matcher": "Write|Edit",
+        "command": "./hooks/goal-check.sh",
+        "timeout": 1000,
         "onError": "continue"
       }
     ],
