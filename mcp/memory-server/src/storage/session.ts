@@ -195,6 +195,12 @@ export class SessionRepository {
       conversationSummary: state.conversationSummary,
       createdAt: new Date(row.created_at * 1000),
       resumedAt: row.resumed_at ? new Date(row.resumed_at * 1000) : null,
+      // V3 fields - load from state if available, otherwise defaults
+      activeGoals: (state as SerializedState & { activeGoals?: Session['activeGoals'] }).activeGoals ?? [],
+      lastGoalCheck: (state as SerializedState & { lastGoalCheck?: number }).lastGoalCheck
+        ? new Date((state as SerializedState & { lastGoalCheck: number }).lastGoalCheck)
+        : null,
+      driftHistory: (state as SerializedState & { driftHistory?: number[] }).driftHistory ?? [],
     };
   }
 }

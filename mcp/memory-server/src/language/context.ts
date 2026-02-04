@@ -3,6 +3,9 @@
  * Extracts structured information about code location
  */
 
+import { createHash } from 'crypto';
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
 import { SymbolType, type CodeContext } from '../types.js';
 
 /**
@@ -147,8 +150,33 @@ export function deserializeCodeContext(json: string | null): CodeContext | null 
       endLine: typeof parsed.endLine === 'number' ? parsed.endLine : undefined,
       symbolName: typeof parsed.symbolName === 'string' ? parsed.symbolName : undefined,
       symbolType: parsed.symbolType,
+      sourceHash: typeof parsed.sourceHash === 'string' ? parsed.sourceHash : undefined,
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Enrich code context with source file hash for staleness detection
+ * Computes SHA-256 hash of the source file content
+ *
+ * @param context - Code context to enrich
+ * @param projectRoot - Project root directory
+ * @returns Code context with sourceHash populated (if file exists)
+ */
+export function enrichWithSourceHash(context: CodeContext, projectRoot: string): CodeContext {
+  if (!context.filePath) return context;
+
+  const fullPath = resolve(projectRoot, context.filePath);
+  if (!existsSync(fullPath)) return context;
+
+  try {
+    const content = readFileSync(fullPath, 'utf-8');
+    const hash = createHash('sha256').update(content).digest('hex');
+    return { ...context, sourceHash: hash };
+  } catch {
+    // Unable to read file, return context without hash
+    return context;
   }
 }

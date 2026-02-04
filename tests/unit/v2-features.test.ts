@@ -7,7 +7,7 @@ import { parseCodeContext } from '../../mcp/memory-server/src/language/context.j
 import { FeedbackType, SymbolType } from '../../mcp/memory-server/src/types.js';
 
 // Create a mock DatabaseConnection interface with all migrations applied
-function createTestDb(): { instance: Database.Database; close: () => void } {
+function createTestDb(): { instance: Database.Database; close: () => void; transaction: <T>(fn: () => T) => T } {
   const db = new Database(':memory:');
   for (const migration of MIGRATIONS) {
     db.exec(migration.up);
@@ -15,6 +15,7 @@ function createTestDb(): { instance: Database.Database; close: () => void } {
   return {
     instance: db,
     close: () => db.close(),
+    transaction: <T>(fn: () => T): T => db.transaction(fn)(),
   };
 }
 

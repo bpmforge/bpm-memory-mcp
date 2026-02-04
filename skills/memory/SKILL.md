@@ -110,16 +110,119 @@ memory_update({
 ## Session Flow
 
 **Start of session:**
-1. `session_restore` - loads previous context
-2. Review returned memories and working state
+1. `session_restore` - loads previous context + active goals
+2. `goal_anchor({ action: 'list' })` - review session goals
+3. Review returned memories and working state
 
 **During work:**
 - Store decisions as you make them
 - Store errors when you solve them
 - Store patterns when you recognize them
+- `goal_anchor({ action: 'check' })` after major milestones
 
 **End of session:**
-1. `session_save({ summary: "..." })` - persists state
+1. `goal_anchor({ action: 'check' })` - verify goal alignment
+2. `session_save({ summary: "..." })` - persists state
+
+## Goal Anchoring
+
+Prevent context drift by setting and tracking session goals.
+
+**Set goals at session start:**
+```
+goal_anchor({
+  action: "set",
+  content: "Implement user authentication with JWT",
+  priority: 1  // 1=highest, 5=lowest
+})
+```
+
+**Check drift periodically:**
+```
+goal_anchor({ action: "check" })
+```
+Returns drift indicator (0-1) and active goals. Warning triggers at >0.7.
+
+**Complete goals when done:**
+```
+goal_anchor({
+  action: "complete",
+  goalId: "uuid",
+  note: "Implemented with refresh token support"
+})
+```
+
+## Memory Linking
+
+Create Zettelkasten-style connections between related memories.
+
+**Link related memories:**
+```
+memory_link({
+  action: "create",
+  sourceId: "memory-uuid-1",
+  targetId: "memory-uuid-2",
+  linkType: "relates_to",  // relates_to, contradicts, supports, extends, derived_from
+  strength: 0.9
+})
+```
+
+**Find connected memories:**
+```
+memory_link({
+  action: "find_related",
+  memoryId: "memory-uuid",
+  depth: 2  // traverse up to 2 hops
+})
+```
+
+**Link types:**
+| Type | Use when |
+|------|----------|
+| `relates_to` | General relationship |
+| `contradicts` | Conflicting information |
+| `supports` | Evidence or reinforcement |
+| `extends` | Builds upon or adds detail |
+| `derived_from` | Based on or concluded from |
+
+## Task Checkpoints
+
+Save and restore task progress for complex multi-step work.
+
+**Save checkpoint:**
+```
+checkpoint_task({
+  action: "save",
+  taskId: "auth-implementation",
+  phase: "token-validation",
+  completedSteps: ["JWT setup", "Token generation"],
+  pendingSteps: ["Refresh flow", "Error handling"],
+  artifacts: ["src/auth/jwt.ts", "src/auth/middleware.ts"]
+})
+```
+
+**Restore checkpoint:**
+```
+checkpoint_task({
+  action: "restore",
+  taskId: "auth-implementation"
+})
+```
+
+## Automatic Memory Extraction
+
+### When to Store Automatically
+- User says "let's use X" or "we'll go with Y" -> decision
+- Error solved -> error memory with solution
+- User establishes objectives -> `goal_anchor` immediately
+- Recurring approach noticed -> pattern memory
+
+### Contradiction Handling
+When `memory_store` returns a `contradictionWarning`:
+1. Review the conflicting memory
+2. If contradiction is real: create `contradicts` link
+3. If old info is outdated: use `memory_update`
+4. If unclear: flag for user review
 
 ## Context Engineering
 

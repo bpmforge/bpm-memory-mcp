@@ -1,11 +1,17 @@
-import type { MemorySearchResult, MemoryType } from '../types.js';
+import type { MemorySearchResult, MemoryType, MemoryLink } from '../types.js';
 
 export interface RerankOptions {
   recencyWeight?: number;
   confidenceWeight?: number;
   accessWeight?: number;
+  linkDensityWeight?: number;
   now?: Date;
 }
+
+/**
+ * Weight for link density factor in reranking
+ */
+const DEFAULT_LINK_DENSITY_WEIGHT = 0.15;
 
 /**
  * Type-specific recency decay factors
@@ -14,6 +20,8 @@ export interface RerankOptions {
  * PATTERN: Weak decay (patterns remain relevant)
  * FACT: Very weak decay (facts persist)
  * PREFERENCE: Moderate decay (preferences can change)
+ * GOAL: Moderate decay (goals may become outdated)
+ * CHECKPOINT: Strong decay (checkpoints are time-sensitive)
  */
 const RECENCY_DECAY_FACTORS: Record<MemoryType, number> = {
   error: 0.1, // 10% relevance after ~30 days
@@ -21,6 +29,8 @@ const RECENCY_DECAY_FACTORS: Record<MemoryType, number> = {
   pattern: 0.7, // 70% relevance after ~30 days
   fact: 0.9, // 90% relevance after ~30 days (almost no decay)
   preference: 0.4, // 40% relevance after ~30 days
+  goal: 0.3, // 30% relevance after ~30 days (goals can change)
+  checkpoint: 0.05, // 5% relevance after ~30 days (checkpoints are very time-sensitive)
 };
 
 /**
@@ -110,6 +120,44 @@ function calculateAccessScore(accessCount: number): number {
   // log2(count + 1) normalized to 0-1 range (assumes max ~1000 accesses)
   const logScore = Math.log2(accessCount + 1);
   return Math.min(1, logScore / 10); // 2^10 = 1024
+}
+
+/**
+ * Calculate link density score based on incoming links
+ * More linked memories are considered more important/central
+ */
+export function calculateLinkDensityScore(
+  memoryId: string,
+  linkCountMap: Map<string, number>
+): number {
+  const incomingLinks = linkCountMap.get(memoryId) ?? 0;
+  // Normalize: 5+ incoming links = maximum score
+  return Math.min(1, incomingLinks / 5);
+}
+
+/**
+ * Re-rank with link density awareness
+ */
+export function rerankWithLinkDensity(
+  results: MemorySearchResult[],
+  linkCountMap: Map<string, number>,
+  options: RerankOptions = {}
+): MemorySearchResult[] {
+  const linkDensityWeight = options.linkDensityWeight ?? DEFAULT_LINK_DENSITY_WEIGHT;
+
+  const scored = results.map((result) => {
+    const linkScore = calculateLinkDensityScore(result.memory.id, linkCountMap);
+
+    // Apply link density boost
+    const boostedRelevance = result.relevance * (1 + linkScore * linkDensityWeight);
+
+    return {
+      ...result,
+      relevance: boostedRelevance,
+    };
+  });
+
+  return scored.sort((a, b) => b.relevance - a.relevance);
 }
 
 /**

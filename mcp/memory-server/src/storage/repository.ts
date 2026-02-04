@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import type { DatabaseConnection } from './database.js';
 import type { Memory, MemoryCreateInput, MemoryType, MemoryFeedback, FeedbackType, Language, CodeContext } from '../types.js';
-import { detectLanguage, parseCodeContext, serializeCodeContext, deserializeCodeContext } from '../language/index.js';
+import { detectLanguage, parseCodeContext, serializeCodeContext, deserializeCodeContext, enrichWithSourceHash } from '../language/index.js';
 
 /**
  * Confidence adjustment deltas for feedback
@@ -21,82 +21,101 @@ export class MemoryRepository {
 
   /**
    * Create a new memory entry
+   * Uses transaction to ensure atomicity when superseding memories
    */
-  createMemory(input: MemoryCreateInput, embedding: Float32Array | null = null): Memory {
+  createMemory(
+    input: MemoryCreateInput,
+    embedding: Float32Array | null = null,
+    projectRoot?: string
+  ): Memory {
     const now = Math.floor(Date.now() / 1000);
     const id = randomUUID();
     const contentHash = this.hashContent(input.content);
 
     // V2: Auto-detect language and parse code context if not provided
     const language = input.language ?? detectLanguage(input.citation) ?? null;
-    const codeContext = input.codeContext ?? parseCodeContext(input.citation) ?? null;
-    const codeContextJson = codeContext ? serializeCodeContext(codeContext) : null;
+    let codeContext = input.codeContext ?? parseCodeContext(input.citation) ?? null;
 
-    // V2: Handle versioning for superseding memories
-    let version = 1;
-    if (input.supersedesId) {
-      const oldMemory = this.findById(input.supersedesId, input.projectId);
-      if (oldMemory) {
-        version = oldMemory.version + 1;
-        // Mark old memory as superseded
-        this.db.instance
-          .prepare(
-            `UPDATE memories SET superseded_by = ?, superseded_at = ? WHERE id = ? AND project_id = ?`
-          )
-          .run(id, now, input.supersedesId, input.projectId);
-      }
+    // Enrich with sourceHash if projectRoot provided
+    if (codeContext && projectRoot) {
+      codeContext = enrichWithSourceHash(codeContext, projectRoot);
     }
 
-    this.db.instance
-      .prepare(
-        `INSERT INTO memories (
-          id, content, embedding, type, confidence, citation,
-          project_id, content_hash, created_at, accessed_at, access_count,
-          language, code_context, version, supersedes_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
-      )
-      .run(
-        id,
-        input.content,
-        embedding ? Buffer.from(embedding.buffer) : null,
-        input.type ?? 'fact',
-        input.confidence ?? 1.0,
-        input.citation ?? null,
-        input.projectId,
-        contentHash,
-        now,
-        now,
-        language,
-        codeContextJson,
-        version,
-        input.supersedesId ?? null
-      );
+    const codeContextJson = codeContext ? serializeCodeContext(codeContext) : null;
 
-    return {
-      id,
-      content: input.content,
-      embedding,
-      type: (input.type ?? 'fact') as MemoryType,
-      confidence: input.confidence ?? 1.0,
-      citation: input.citation ?? null,
-      projectId: input.projectId,
-      contentHash,
-      createdAt: new Date(now * 1000),
-      accessedAt: new Date(now * 1000),
-      accessCount: 0,
-      deletedAt: null,
-      deleteReason: null,
-      // V2 fields
-      language,
-      codeContext,
-      version,
-      supersedesId: input.supersedesId ?? null,
-      supersededBy: null,
-      supersededAt: null,
-      flaggedAt: null,
-      flaggedReason: null,
-      embeddingModel: null,
-    };
+    // Wrap in transaction to ensure atomicity of UPDATE + INSERT for supersession
+    return this.db.transaction(() => {
+      // V2: Handle versioning for superseding memories
+      let version = 1;
+      if (input.supersedesId) {
+        const oldMemory = this.findById(input.supersedesId, input.projectId);
+        if (oldMemory) {
+          version = oldMemory.version + 1;
+          // Mark old memory as superseded
+          this.db.instance
+            .prepare(
+              `UPDATE memories SET superseded_by = ?, superseded_at = ? WHERE id = ? AND project_id = ?`
+            )
+            .run(id, now, input.supersedesId, input.projectId);
+        }
+      }
+
+      this.db.instance
+        .prepare(
+          `INSERT INTO memories (
+            id, content, embedding, type, confidence, citation,
+            project_id, content_hash, created_at, accessed_at, access_count,
+            language, code_context, version, supersedes_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
+        )
+        .run(
+          id,
+          input.content,
+          embedding ? Buffer.from(embedding.buffer) : null,
+          input.type ?? 'fact',
+          input.confidence ?? 1.0,
+          input.citation ?? null,
+          input.projectId,
+          contentHash,
+          now,
+          now,
+          language,
+          codeContextJson,
+          version,
+          input.supersedesId ?? null
+        );
+
+      return {
+        id,
+        content: input.content,
+        embedding,
+        type: (input.type ?? 'fact') as MemoryType,
+        confidence: input.confidence ?? 1.0,
+        citation: input.citation ?? null,
+        projectId: input.projectId,
+        contentHash,
+        createdAt: new Date(now * 1000),
+        accessedAt: new Date(now * 1000),
+        accessCount: 0,
+        deletedAt: null,
+        deleteReason: null,
+        // V2 fields
+        language,
+        codeContext,
+        version,
+        supersedesId: input.supersedesId ?? null,
+        supersededBy: null,
+        supersededAt: null,
+        flaggedAt: null,
+        flaggedReason: null,
+        embeddingModel: null,
+        // V3 fields
+        goalStatus: null,
+        goalPriority: null,
+        parentGoalId: null,
+        checkpointData: null,
+      };
+    });
   }
 
   /**
@@ -281,6 +300,16 @@ export class MemoryRepository {
   }
 
   /**
+   * Get count of active (non-deleted) memories for quota enforcement
+   */
+  getMemoryCount(projectId: string): number {
+    const row = this.db.instance
+      .prepare('SELECT COUNT(*) as count FROM memories WHERE project_id = ? AND deleted_at IS NULL')
+      .get(projectId) as { count: number };
+    return row.count;
+  }
+
+  /**
    * Count memories by type
    */
   countByType(projectId: string): Record<MemoryType, number> {
@@ -343,6 +372,11 @@ export class MemoryRepository {
       flaggedAt: row.flagged_at ? new Date(row.flagged_at * 1000) : null,
       flaggedReason: row.flagged_reason,
       embeddingModel: row.embedding_model,
+      // V3 fields
+      goalStatus: (row.goal_status as Memory['goalStatus']) ?? null,
+      goalPriority: row.goal_priority ?? null,
+      parentGoalId: row.parent_goal_id ?? null,
+      checkpointData: row.checkpoint_data ? JSON.parse(row.checkpoint_data) : null,
     };
   }
 
@@ -357,7 +391,9 @@ export class MemoryRepository {
     oldId: string,
     projectId: string,
     newContent: string,
-    embedding: Float32Array | null = null
+    embedding: Float32Array | null = null,
+    language?: string,
+    projectRoot?: string
   ): Memory {
     const oldMemory = this.findById(oldId, projectId);
     if (!oldMemory) {
@@ -373,10 +409,15 @@ export class MemoryRepository {
     };
     // Only add optional fields if they have values
     if (oldMemory.citation) input.citation = oldMemory.citation;
-    if (oldMemory.language) input.language = oldMemory.language;
+    // Honor new language if provided, otherwise keep old language
+    if (language) {
+      input.language = language as Language;
+    } else if (oldMemory.language) {
+      input.language = oldMemory.language;
+    }
     if (oldMemory.codeContext) input.codeContext = oldMemory.codeContext;
 
-    return this.createMemory(input, embedding);
+    return this.createMemory(input, embedding, projectRoot);
   }
 
   /**
@@ -598,4 +639,9 @@ interface MemoryRow {
   flagged_at: number | null;
   flagged_reason: string | null;
   embedding_model: string | null;
+  // V3 columns
+  goal_status: string | null;
+  goal_priority: number | null;
+  parent_goal_id: string | null;
+  checkpoint_data: string | null;
 }

@@ -14,4 +14,5 @@ export {
   formatCodeContext,
   serializeCodeContext,
   deserializeCodeContext,
+  enrichWithSourceHash,
 } from './context.js';

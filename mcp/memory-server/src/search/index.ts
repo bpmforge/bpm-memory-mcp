@@ -3,13 +3,16 @@ import type { Memory, MemoryType, MemorySearchResult, SearchResponse, SearchOpti
 import type { EmbeddingService } from '../embeddings/index.js';
 import { VectorSearch } from './vector.js';
 import { BM25Search } from './bm25.js';
-import { rrfFusion, interleave } from './rrf.js';
+import { rrfFusion, rrfFusionWithLinks, interleave } from './rrf.js';
+import { MemoryLinkRepository } from '../storage/links.js';
 
 export { VectorSearch, cosineSimilarity, normalizeVector } from './vector.js';
 export { BM25Search } from './bm25.js';
-export { rrfFusion, interleave } from './rrf.js';
+export { rrfFusion, rrfFusionWithLinks, interleave } from './rrf.js';
 export {
   rerankResults,
+  rerankWithLinkDensity,
+  calculateLinkDensityScore,
   filterByRecency,
   filterByConfidence,
   boostByType,
@@ -17,11 +20,12 @@ export {
 } from './rerank.js';
 
 /**
- * Hybrid search service combining vector and BM25 search
+ * Hybrid search service combining vector, BM25, and link-based search
  */
 export class HybridSearch {
   private vectorSearch: VectorSearch;
   private bm25Search: BM25Search;
+  private linkRepository: MemoryLinkRepository;
 
   constructor(
     private db: DatabaseConnection,
@@ -29,31 +33,59 @@ export class HybridSearch {
     private config: {
       vectorWeight?: number;
       bm25Weight?: number;
+      linkWeight?: number;
       rrfK?: number;
+      enableLinkSearch?: boolean;
     } = {}
   ) {
     this.vectorSearch = new VectorSearch();
     this.bm25Search = new BM25Search(db);
+    this.linkRepository = new MemoryLinkRepository(db);
   }
 
   /**
-   * Perform hybrid search combining vector and BM25 results
+   * Perform hybrid search combining vector, BM25, and link-based results
    */
   async search(query: string, options: SearchOptions): Promise<SearchResponse> {
     const startTime = Date.now();
     const limit = options.limit ?? 10;
+    const enableLinks = this.config.enableLinkSearch ?? true;
 
-    // Run both searches in parallel
+    // Run vector and BM25 searches in parallel
     const [vectorResults, bm25Results] = await Promise.all([
       this.vectorSearchMemories(query, options),
       this.bm25SearchMemories(query, options),
     ]);
+
+    // Get seed memory IDs from initial results for link traversal
+    let linkResults: MemorySearchResult[] = [];
+    if (enableLinks && (vectorResults.length > 0 || bm25Results.length > 0)) {
+      // Use top results as seeds for link traversal
+      const seedIds = [
+        ...vectorResults.slice(0, 5).map((r) => r.memory.id),
+        ...bm25Results.slice(0, 5).map((r) => r.memory.id),
+      ];
+      const uniqueSeedIds = [...new Set(seedIds)];
+      linkResults = this.linkSearchMemories(uniqueSeedIds, options);
+    }
 
     // Combine results using RRF
     let fusedResults: MemorySearchResult[];
 
     if (vectorResults.length === 0 && bm25Results.length === 0) {
       fusedResults = [];
+    } else if (vectorResults.length === 0 && bm25Results.length === 0 && linkResults.length > 0) {
+      // Only link results available
+      fusedResults = linkResults.slice(0, limit);
+    } else if (linkResults.length > 0) {
+      // Full three-way fusion with links
+      fusedResults = rrfFusionWithLinks(vectorResults, bm25Results, linkResults, {
+        k: this.config.rrfK ?? 60,
+        vectorWeight: this.config.vectorWeight ?? 0.35,
+        bm25Weight: this.config.bm25Weight ?? 0.35,
+        linkWeight: this.config.linkWeight ?? 0.30,
+        limit,
+      });
     } else if (vectorResults.length === 0) {
       // Vector search unavailable - use BM25 only
       fusedResults = bm25Results.slice(0, limit);
@@ -61,7 +93,7 @@ export class HybridSearch {
       // BM25 returned nothing - use vector only
       fusedResults = vectorResults.slice(0, limit);
     } else {
-      // Full hybrid search
+      // Two-way hybrid search (no link results)
       fusedResults = rrfFusion(vectorResults, bm25Results, {
         k: this.config.rrfK ?? 60,
         vectorWeight: this.config.vectorWeight ?? 0.5,
@@ -153,6 +185,64 @@ export class HybridSearch {
     return this.bm25Search.search(query, options.projectId, bm25Options);
   }
 
+  /**
+   * Link-based search: traverse links from seed memories
+   * Returns memories connected to seeds, scored by link strength and distance
+   */
+  private linkSearchMemories(
+    seedMemoryIds: string[],
+    options: SearchOptions
+  ): MemorySearchResult[] {
+    const DISTANCE_DECAY = 0.5; // Score halves with each hop
+    const MAX_DEPTH = 2;
+
+    const seenIds = new Set(seedMemoryIds);
+    const linkedMemories: Array<{ memory: Memory; score: number }> = [];
+
+    for (const seedId of seedMemoryIds) {
+      const linkedIds = this.linkRepository.findLinkedMemoryIds(seedId, MAX_DEPTH);
+
+      for (const { memoryId, distance, linkStrength } of linkedIds) {
+        // Skip if already processed or is a seed
+        if (seenIds.has(memoryId)) continue;
+        seenIds.add(memoryId);
+
+        // Fetch memory
+        const row = this.db.instance
+          .prepare(
+            `SELECT * FROM memories
+             WHERE id = ? AND project_id = ? AND deleted_at IS NULL`
+          )
+          .get(memoryId, options.projectId) as MemoryRow | undefined;
+
+        if (!row) continue;
+
+        const memory = this.rowToMemory(row);
+
+        // Apply filters
+        if (options.type && memory.type !== options.type) continue;
+        if (options.minConfidence !== undefined && memory.confidence < options.minConfidence) continue;
+        if (!options.includeSuperseded && memory.supersededBy) continue;
+        if (!options.includeStale && memory.flaggedAt) continue;
+        if (options.language && memory.language !== options.language) continue;
+
+        // Calculate score: linkStrength * distance_decay^distance
+        const score = linkStrength * Math.pow(DISTANCE_DECAY, distance);
+
+        linkedMemories.push({ memory, score });
+      }
+    }
+
+    // Sort by score descending
+    linkedMemories.sort((a, b) => b.score - a.score);
+
+    // Convert to MemorySearchResult
+    return linkedMemories.slice(0, (options.limit ?? 10) * 2).map(({ memory, score }) => ({
+      memory,
+      relevance: score,
+    }));
+  }
+
   private rowToMemory(row: MemoryRow): Memory {
     return {
       id: row.id,
@@ -178,6 +268,11 @@ export class HybridSearch {
       flaggedAt: row.flagged_at ? new Date(row.flagged_at * 1000) : null,
       flaggedReason: row.flagged_reason ?? null,
       embeddingModel: row.embedding_model ?? null,
+      // V3 fields
+      goalStatus: (row.goal_status as Memory['goalStatus']) ?? null,
+      goalPriority: row.goal_priority ?? null,
+      parentGoalId: row.parent_goal_id ?? null,
+      checkpointData: row.checkpoint_data ? JSON.parse(row.checkpoint_data) : null,
     };
   }
 }
@@ -206,4 +301,9 @@ interface MemoryRow {
   flagged_at?: number | null;
   flagged_reason?: string | null;
   embedding_model?: string | null;
+  // V3 columns
+  goal_status?: string | null;
+  goal_priority?: number | null;
+  parent_goal_id?: string | null;
+  checkpoint_data?: string | null;
 }

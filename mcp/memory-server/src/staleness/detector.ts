@@ -31,6 +31,11 @@ interface MemoryRow {
   flagged_at?: number | null;
   flagged_reason?: string | null;
   embedding_model?: string | null;
+  // V3 columns
+  goal_status?: string | null;
+  goal_priority?: number | null;
+  parent_goal_id?: string | null;
+  checkpoint_data?: string | null;
 }
 
 /**
@@ -230,6 +235,11 @@ export class StalenessDetector {
       flaggedAt: row.flagged_at ? new Date(row.flagged_at * 1000) : null,
       flaggedReason: row.flagged_reason ?? null,
       embeddingModel: row.embedding_model ?? null,
+      // V3 fields
+      goalStatus: (row.goal_status as Memory['goalStatus']) ?? null,
+      goalPriority: row.goal_priority ?? null,
+      parentGoalId: row.parent_goal_id ?? null,
+      checkpointData: row.checkpoint_data ? JSON.parse(row.checkpoint_data) : null,
     };
   }
 }

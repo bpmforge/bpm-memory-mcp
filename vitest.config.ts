@@ -12,5 +12,12 @@ export default defineConfig({
       exclude: ['mcp/memory-server/src/index.ts'],
     },
     testTimeout: 10000,
+    benchmark: {
+      include: ['tests/benchmarks/**/*.bench.ts'],
+      reporters: ['default'],
+      outputFile: {
+        json: './benchmark-results.json',
+      },
+    },
   },
 });

@@ -15,6 +15,10 @@ import { HybridSearch } from './search/index.js';
 import { MemoryRepository } from './storage/repository.js';
 import { SessionRepository } from './storage/session.js';
 import { CoreMemoryRepository } from './storage/core_memory.js';
+import { StalenessDetector } from './staleness/detector.js';
+import { containsCredentials } from './security/credentials.js';
+import { isPathSafe } from './security/paths.js';
+import { parseCodeContext } from './language/context.js';
 import {
   MemoryStoreInputSchema,
   MemoryRecallInputSchema,
@@ -22,11 +26,27 @@ import {
   MemoryUpdateInputSchema,
   MemoryFeedbackInputSchema,
   SessionSaveInputSchema,
+  GoalAnchorInputSchema,
+  MemoryLinkInputSchema,
+  CheckpointTaskInputSchema,
   FeedbackType,
+  MemoryLinkType,
   type MemoryCreateInput,
   type SearchOptions,
   type CodeContext,
 } from './types.js';
+import { GoalRepository } from './goals/index.js';
+import { calculateDriftIndicator, getDriftWarningMessage } from './goals/drift.js';
+import { MemoryLinkRepository } from './storage/links.js';
+import { CheckpointRepository } from './checkpoint/index.js';
+import { ContradictionDetector } from './validation/contradictions.js';
+
+// Storage quota: maximum memories per project
+const MAX_MEMORIES_PER_PROJECT = 10000;
+
+// Benchmark mode: disable hardening for comparison testing
+// WARNING: Only use for benchmarking - never in production
+const HARDENING_DISABLED = process.env.CLAUDE_MEMORY_DISABLE_HARDENING === 'true';
 
 // Current project context
 let currentProjectId: string | null = null;
@@ -37,6 +57,13 @@ let hybridSearch: HybridSearch | null = null;
 let memoryRepository: MemoryRepository | null = null;
 let sessionRepository: SessionRepository | null = null;
 let coreMemoryRepository: CoreMemoryRepository | null = null;
+let stalenessDetector: StalenessDetector | null = null;
+// V3 services for goals, links, and checkpoints
+let goalRepository: GoalRepository | null = null;
+let memoryLinkRepository: MemoryLinkRepository | null = null;
+let checkpointRepository: CheckpointRepository | null = null;
+let contradictionDetector: ContradictionDetector | null = null;
+let lastGoalCheck: Date | null = null;
 
 /**
  * Initialize services for a project
@@ -60,6 +87,12 @@ async function initializeForProject(projectId: string): Promise<void> {
   memoryRepository = new MemoryRepository(db);
   sessionRepository = new SessionRepository(db);
   coreMemoryRepository = new CoreMemoryRepository(db);
+  stalenessDetector = new StalenessDetector(db);
+  // V3 services
+  goalRepository = new GoalRepository(db);
+  memoryLinkRepository = new MemoryLinkRepository(db);
+  checkpointRepository = new CheckpointRepository(db);
+  contradictionDetector = new ContradictionDetector(db);
 
   // Initialize core memory if needed
   if (!coreMemoryRepository.isInitialized(projectId)) {
@@ -214,6 +247,89 @@ function createServer(): Server {
           properties: {},
         },
       },
+      // V3 tools for goals, links, and checkpoints
+      {
+        name: 'goal_anchor',
+        description: 'Set, track, and check session goals to prevent context drift',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['set', 'complete', 'check', 'list'],
+              description: 'Action to perform',
+            },
+            content: { type: 'string', description: 'Goal description (for "set")' },
+            priority: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 5,
+              description: 'Priority 1-5 where 1 is highest (for "set")',
+            },
+            goalId: { type: 'string', format: 'uuid', description: 'Goal ID (for "complete"/"check")' },
+            note: { type: 'string', description: 'Completion note (for "complete")' },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'memory_link',
+        description: 'Create Zettelkasten-style links between memories',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['create', 'find_related', 'get_links'],
+              description: 'Action to perform',
+            },
+            sourceId: { type: 'string', format: 'uuid', description: 'Source memory ID (for "create")' },
+            targetId: { type: 'string', format: 'uuid', description: 'Target memory ID (for "create")' },
+            linkType: {
+              type: 'string',
+              enum: ['relates_to', 'contradicts', 'supports', 'extends', 'derived_from'],
+              description: 'Type of link relationship',
+            },
+            strength: { type: 'number', minimum: 0, maximum: 1, description: 'Link strength 0-1' },
+            bidirectional: { type: 'boolean', description: 'Whether link works both directions' },
+            memoryId: { type: 'string', format: 'uuid', description: 'Memory ID (for "find_related"/"get_links")' },
+            depth: { type: 'integer', minimum: 1, maximum: 3, description: 'Traversal depth for "find_related"' },
+          },
+          required: ['action'],
+        },
+      },
+      {
+        name: 'checkpoint_task',
+        description: 'Save/restore structured task progress for resumption',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['save', 'restore', 'list'],
+              description: 'Action to perform',
+            },
+            taskId: { type: 'string', description: 'Task identifier' },
+            phase: { type: 'string', description: 'Current task phase' },
+            completedSteps: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Steps already completed',
+            },
+            pendingSteps: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Steps still pending',
+            },
+            artifacts: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Artifacts created (file paths, etc.)',
+            },
+          },
+          required: ['action'],
+        },
+      },
     ],
   }));
 
@@ -238,6 +354,37 @@ function createServer(): Server {
       switch (name) {
         case 'memory_store': {
           const input = MemoryStoreInputSchema.parse(args);
+
+          // Security checks (can be disabled for benchmarking)
+          if (!HARDENING_DISABLED) {
+            // Security: Check for credentials (SC-001)
+            if (containsCredentials(input.content)) {
+              return {
+                content: [{ type: 'text', text: 'Error: Content appears to contain credentials or secrets. Memory not stored.' }],
+                isError: true,
+              };
+            }
+
+            // Security: Validate citation path (SC-002)
+            if (input.citation) {
+              const parsed = parseCodeContext(input.citation);
+              if (parsed && !isPathSafe(parsed.filePath, projectRoot)) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Citation path is outside project root.' }],
+                  isError: true,
+                };
+              }
+            }
+
+            // Security: Check storage quota
+            if (memoryRepository.getMemoryCount(projectId) >= MAX_MEMORIES_PER_PROJECT) {
+              return {
+                content: [{ type: 'text', text: `Error: Storage limit reached (${MAX_MEMORIES_PER_PROJECT} memories). Consider archiving or deleting old memories.` }],
+                isError: true,
+              };
+            }
+          }
+
           const embedding = await embeddingService.embed(input.content);
 
           // Check for duplicate
@@ -269,7 +416,32 @@ function createServer(): Server {
             memoryInput.codeContext = ctx;
           }
 
-          const memory = memoryRepository.createMemory(memoryInput, embedding);
+          // V3: Check for potential contradictions before storing
+          let contradictionWarning: {
+            count: number;
+            memories: Array<{ id: string; similarity: number; reason: string }>;
+          } | null = null;
+
+          if (contradictionDetector && embedding && !HARDENING_DISABLED) {
+            const contradictions = await contradictionDetector.detectOnStore(
+              input.content,
+              embedding,
+              projectId
+            );
+
+            if (contradictions.length > 0) {
+              contradictionWarning = {
+                count: contradictions.length,
+                memories: contradictions.slice(0, 3).map((c) => ({
+                  id: c.memoryId,
+                  similarity: Math.round(c.similarity * 100) / 100,
+                  reason: c.reason,
+                })),
+              };
+            }
+          }
+
+          const memory = memoryRepository.createMemory(memoryInput, embedding, projectRoot);
 
           return {
             content: [
@@ -283,6 +455,8 @@ function createServer(): Server {
                   // V2 response fields
                   language: memory.language,
                   version: memory.version,
+                  // V3 response fields
+                  contradictionWarning,
                 }),
               },
             ],
@@ -362,7 +536,9 @@ function createServer(): Server {
               input.id,
               projectId,
               input.content,
-              embedding
+              embedding,
+              input.language, // Honor new language if provided
+              projectRoot
             );
 
             return {
@@ -373,6 +549,7 @@ function createServer(): Server {
                     id: newMemory.id,
                     version: newMemory.version,
                     supersedesId: newMemory.supersedesId,
+                    language: newMemory.language,
                     message: `Memory updated to version ${newMemory.version}`,
                   }),
                 },
@@ -410,7 +587,9 @@ function createServer(): Server {
               input.id,
               projectId,
               input.correction,
-              embedding
+              embedding,
+              undefined, // Keep existing language
+              projectRoot
             );
             newMemoryId = newMemory.id;
           }
@@ -475,6 +654,17 @@ function createServer(): Server {
           const session = sessionRepository.getLatestSession(projectId);
 
           if (!session) {
+            // Run staleness detection even for new sessions (can be disabled for benchmarking)
+            const staleReport = (stalenessDetector && !HARDENING_DISABLED) ? {
+              accessStale: stalenessDetector.detectAccessStale(projectId).length,
+              sourceMissing: stalenessDetector.detectSourceMissing(projectId, projectRoot).length,
+              lowConfidence: stalenessDetector.detectLowConfidence(projectId).length,
+              contentChanged: stalenessDetector.detectContentChanged(projectId, projectRoot).length,
+            } : null;
+
+            // V3: Include active goals even for new sessions
+            const activeGoals = goalRepository?.getActiveGoals(projectId) ?? [];
+
             return {
               content: [
                 {
@@ -482,14 +672,38 @@ function createServer(): Server {
                   text: JSON.stringify({
                     message: 'No previous session found',
                     isNewSession: true,
+                    stalenessReport: staleReport,
+                    activeGoals: activeGoals.map((g) => ({
+                      id: g.id,
+                      content: g.content,
+                      priority: g.priority,
+                    })),
                   }),
                 },
               ],
             };
           }
 
+          // Run staleness detection (can be disabled for benchmarking)
+          const staleReport = (stalenessDetector && !HARDENING_DISABLED) ? {
+            accessStale: stalenessDetector.detectAccessStale(projectId).length,
+            sourceMissing: stalenessDetector.detectSourceMissing(projectId, projectRoot).length,
+            lowConfidence: stalenessDetector.detectLowConfidence(projectId).length,
+            contentChanged: stalenessDetector.detectContentChanged(projectId, projectRoot).length,
+          } : null;
+
           // Mark session as resumed
           sessionRepository.markResumed(session.id);
+
+          // V3: Include active goals and drift indicator
+          const activeGoals = goalRepository?.getActiveGoals(projectId) ?? [];
+          const driftResult = calculateDriftIndicator(
+            activeGoals,
+            session.conversationSummary,
+            lastGoalCheck ? Math.floor((Date.now() - lastGoalCheck.getTime()) / 1000) : 0,
+            lastGoalCheck ?? undefined
+          );
+          lastGoalCheck = new Date();
 
           return {
             content: [
@@ -503,11 +717,459 @@ function createServer(): Server {
                     persona: session.coreMemorySnapshot.persona.content.substring(0, 100),
                     goals: session.coreMemorySnapshot.goals.content.substring(0, 100),
                   },
+                  stalenessReport: staleReport,
+                  // V3 response fields
+                  activeGoals: activeGoals.map((g) => ({
+                    id: g.id,
+                    content: g.content,
+                    priority: g.priority,
+                  })),
+                  driftIndicator: driftResult.indicator,
+                  driftWarning: driftResult.isWarning ? getDriftWarningMessage(driftResult) : null,
                   message: 'Session restored successfully',
                 }),
               },
             ],
           };
+        }
+
+        // V3 tool handlers
+        case 'goal_anchor': {
+          if (!goalRepository) {
+            return {
+              content: [{ type: 'text', text: 'Error: Goal repository not initialized' }],
+              isError: true,
+            };
+          }
+
+          const input = GoalAnchorInputSchema.parse(args);
+
+          switch (input.action) {
+            case 'set': {
+              if (!input.content) {
+                return {
+                  content: [{ type: 'text', text: 'Error: content is required for "set" action' }],
+                  isError: true,
+                };
+              }
+
+              const goal = goalRepository.createGoal(projectId, {
+                content: input.content,
+                priority: input.priority,
+              });
+              lastGoalCheck = new Date();
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      goalId: goal.id,
+                      content: goal.content,
+                      priority: goal.priority,
+                      status: goal.status,
+                      message: `Goal set with priority ${goal.priority}`,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'complete': {
+              if (!input.goalId) {
+                return {
+                  content: [{ type: 'text', text: 'Error: goalId is required for "complete" action' }],
+                  isError: true,
+                };
+              }
+
+              const success = goalRepository.completeGoal(input.goalId, projectId, input.note);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: success
+                      ? JSON.stringify({
+                          goalId: input.goalId,
+                          status: 'completed',
+                          message: 'Goal marked as completed',
+                        })
+                      : `Goal ${input.goalId} not found or already completed`,
+                  },
+                ],
+              };
+            }
+
+            case 'check': {
+              const activeGoals = goalRepository.getActiveGoals(projectId);
+              const timeSinceLastCheck = lastGoalCheck
+                ? Math.floor((Date.now() - lastGoalCheck.getTime()) / 1000)
+                : 0;
+
+              // Use recent context from session summary if available
+              const session = sessionRepository?.getLatestSession(projectId);
+              const recentContext = session?.conversationSummary ?? '';
+
+              const driftResult = calculateDriftIndicator(
+                activeGoals,
+                recentContext,
+                timeSinceLastCheck,
+                lastGoalCheck ?? undefined
+              );
+              lastGoalCheck = new Date();
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      driftIndicator: driftResult.indicator,
+                      isWarning: driftResult.isWarning,
+                      activeGoalCount: driftResult.activeGoalCount,
+                      timeSinceLastCheck: driftResult.timeSinceLastCheck,
+                      activeGoals: activeGoals.map((g) => ({
+                        id: g.id,
+                        content: g.content,
+                        priority: g.priority,
+                      })),
+                      warning: driftResult.isWarning ? getDriftWarningMessage(driftResult) : null,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'list': {
+              const allGoals = goalRepository.getAllGoals(projectId);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      goals: allGoals.map((g) => ({
+                        id: g.id,
+                        content: g.content,
+                        priority: g.priority,
+                        status: g.status,
+                        createdAt: g.createdAt.toISOString(),
+                        progressNotes: g.progressNotes,
+                      })),
+                      activeCount: allGoals.filter((g) => g.status === 'active').length,
+                      completedCount: allGoals.filter((g) => g.status === 'completed').length,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            default:
+              return {
+                content: [{ type: 'text', text: `Unknown goal_anchor action: ${input.action}` }],
+                isError: true,
+              };
+          }
+        }
+
+        case 'memory_link': {
+          if (!memoryLinkRepository) {
+            return {
+              content: [{ type: 'text', text: 'Error: Memory link repository not initialized' }],
+              isError: true,
+            };
+          }
+
+          const input = MemoryLinkInputSchema.parse(args);
+
+          switch (input.action) {
+            case 'create': {
+              if (!input.sourceId || !input.targetId || !input.linkType) {
+                return {
+                  content: [{ type: 'text', text: 'Error: sourceId, targetId, and linkType are required for "create" action' }],
+                  isError: true,
+                };
+              }
+
+              // Verify both memories exist
+              const source = memoryRepository!.findById(input.sourceId, projectId);
+              const target = memoryRepository!.findById(input.targetId, projectId);
+
+              if (!source) {
+                return {
+                  content: [{ type: 'text', text: `Error: Source memory ${input.sourceId} not found` }],
+                  isError: true,
+                };
+              }
+
+              if (!target) {
+                return {
+                  content: [{ type: 'text', text: `Error: Target memory ${input.targetId} not found` }],
+                  isError: true,
+                };
+              }
+
+              // Check for existing link
+              const existingLink = memoryLinkRepository.findLinkBetween(input.sourceId, input.targetId);
+              if (existingLink) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({
+                        linkId: existingLink.id,
+                        message: 'Link already exists between these memories',
+                        existing: true,
+                      }),
+                    },
+                  ],
+                };
+              }
+
+              const link = memoryLinkRepository.createLink({
+                sourceId: input.sourceId,
+                targetId: input.targetId,
+                linkType: input.linkType as MemoryLinkType,
+                strength: input.strength,
+                bidirectional: input.bidirectional,
+                createdBy: 'claude',
+              });
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      linkId: link.id,
+                      sourceId: link.sourceId,
+                      targetId: link.targetId,
+                      linkType: link.linkType,
+                      strength: link.strength,
+                      bidirectional: link.bidirectional,
+                      message: 'Link created successfully',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'find_related': {
+              if (!input.memoryId) {
+                return {
+                  content: [{ type: 'text', text: 'Error: memoryId is required for "find_related" action' }],
+                  isError: true,
+                };
+              }
+
+              const linkedIds = memoryLinkRepository.findLinkedMemoryIds(
+                input.memoryId,
+                input.depth ?? 2
+              );
+
+              // Fetch the actual memory content
+              const relatedMemories = linkedIds
+                .map(({ memoryId, distance, linkStrength }) => {
+                  const memory = memoryRepository!.findById(memoryId, projectId);
+                  if (!memory) return null;
+                  return {
+                    id: memory.id,
+                    content: memory.content,
+                    type: memory.type,
+                    distance,
+                    linkStrength,
+                  };
+                })
+                .filter((m) => m !== null);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      seedMemoryId: input.memoryId,
+                      depth: input.depth ?? 2,
+                      relatedMemories,
+                      totalFound: relatedMemories.length,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'get_links': {
+              if (!input.memoryId) {
+                return {
+                  content: [{ type: 'text', text: 'Error: memoryId is required for "get_links" action' }],
+                  isError: true,
+                };
+              }
+
+              const links = memoryLinkRepository.findLinks(input.memoryId);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      memoryId: input.memoryId,
+                      links: links.map((l) => ({
+                        id: l.id,
+                        sourceId: l.sourceId,
+                        targetId: l.targetId,
+                        linkType: l.linkType,
+                        strength: l.strength,
+                        bidirectional: l.bidirectional,
+                        direction: l.sourceId === input.memoryId ? 'outgoing' : 'incoming',
+                      })),
+                      totalLinks: links.length,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            default:
+              return {
+                content: [{ type: 'text', text: `Unknown memory_link action: ${input.action}` }],
+                isError: true,
+              };
+          }
+        }
+
+        case 'checkpoint_task': {
+          if (!checkpointRepository) {
+            return {
+              content: [{ type: 'text', text: 'Error: Checkpoint repository not initialized' }],
+              isError: true,
+            };
+          }
+
+          const input = CheckpointTaskInputSchema.parse(args);
+
+          switch (input.action) {
+            case 'save': {
+              if (!input.taskId || !input.phase) {
+                return {
+                  content: [{ type: 'text', text: 'Error: taskId and phase are required for "save" action' }],
+                  isError: true,
+                };
+              }
+
+              const checkpointInput: {
+                taskId: string;
+                phase: string;
+                completedSteps: string[];
+                pendingSteps: string[];
+                artifacts?: string[];
+              } = {
+                taskId: input.taskId,
+                phase: input.phase,
+                completedSteps: input.completedSteps ?? [],
+                pendingSteps: input.pendingSteps ?? [],
+              };
+              if (input.artifacts) checkpointInput.artifacts = input.artifacts;
+
+              const checkpoint = checkpointRepository.saveCheckpoint(projectId, checkpointInput);
+
+              // Prune old checkpoints for this task
+              checkpointRepository.pruneCheckpoints(projectId, input.taskId, 5);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      checkpointId: checkpoint.id,
+                      taskId: checkpoint.taskId,
+                      phase: checkpoint.phase,
+                      completedSteps: checkpoint.completedSteps.length,
+                      pendingSteps: checkpoint.pendingSteps.length,
+                      artifacts: checkpoint.artifacts.length,
+                      message: 'Checkpoint saved successfully',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'restore': {
+              if (!input.taskId) {
+                return {
+                  content: [{ type: 'text', text: 'Error: taskId is required for "restore" action' }],
+                  isError: true,
+                };
+              }
+
+              const checkpoint = checkpointRepository.restoreCheckpoint(projectId, input.taskId);
+
+              if (!checkpoint) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({
+                        message: `No checkpoint found for task "${input.taskId}"`,
+                        taskId: input.taskId,
+                      }),
+                    },
+                  ],
+                };
+              }
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      checkpointId: checkpoint.id,
+                      taskId: checkpoint.taskId,
+                      phase: checkpoint.phase,
+                      completedSteps: checkpoint.completedSteps,
+                      pendingSteps: checkpoint.pendingSteps,
+                      artifacts: checkpoint.artifacts,
+                      createdAt: checkpoint.createdAt.toISOString(),
+                      message: 'Checkpoint restored successfully',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'list': {
+              const listOptions: { limit?: number; taskId?: string } = { limit: 20 };
+              if (input.taskId) listOptions.taskId = input.taskId;
+
+              const checkpoints = checkpointRepository.listCheckpoints(projectId, listOptions);
+
+              const taskIds = checkpointRepository.getTasksWithCheckpoints(projectId);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      checkpoints: checkpoints.map((c) => ({
+                        id: c.id,
+                        taskId: c.taskId,
+                        phase: c.phase,
+                        completedSteps: c.completedSteps.length,
+                        pendingSteps: c.pendingSteps.length,
+                        createdAt: c.createdAt.toISOString(),
+                      })),
+                      tasksWithCheckpoints: taskIds,
+                      totalCheckpoints: checkpoints.length,
+                    }),
+                  },
+                ],
+              };
+            }
+
+            default:
+              return {
+                content: [{ type: 'text', text: `Unknown checkpoint_task action: ${input.action}` }],
+                isError: true,
+              };
+          }
         }
 
         default:

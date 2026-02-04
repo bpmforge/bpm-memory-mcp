@@ -16,7 +16,14 @@
     "lint": "eslint mcp/memory-server/src --ext .ts",
     "lint:fix": "eslint mcp/memory-server/src --ext .ts --fix",
     "format": "prettier --write \"mcp/memory-server/src/**/*.ts\"",
-    "typecheck": "tsc --noEmit -p mcp/memory-server/tsconfig.json"
+    "typecheck": "tsc --noEmit -p mcp/memory-server/tsconfig.json",
+    "bench": "vitest bench",
+    "bench:real": "vitest bench tests/benchmarks/real --no-file-parallelism",
+    "bench:e2e": "vitest bench tests/benchmarks/e2e",
+    "bench:security": "vitest bench tests/benchmarks/security",
+    "bench:performance": "vitest bench tests/benchmarks/performance",
+    "bench:staleness": "vitest bench tests/benchmarks/staleness",
+    "bench:report": "vitest bench --reporter=json > benchmark-results.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

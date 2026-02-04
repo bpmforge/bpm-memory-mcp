@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 6;
+export const CURRENT_VERSION = 7;
 
 /**
  * Initial schema - Version 1
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     embedding BLOB,
-    type TEXT NOT NULL CHECK (type IN ('fact', 'pattern', 'decision', 'error', 'preference')),
+    type TEXT NOT NULL CHECK (type IN ('fact', 'pattern', 'decision', 'error', 'preference', 'goal', 'checkpoint')),
     confidence REAL NOT NULL DEFAULT 1.0 CHECK (confidence >= 0.0 AND confidence <= 1.0),
     citation TEXT,
     project_id TEXT NOT NULL,
@@ -250,6 +250,60 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
     down: `
       -- Backfill is idempotent, no rollback needed
       -- Language values remain but can be re-computed
+    `,
+  },
+  // V7: Memory Links, Goals, and Checkpoints
+  {
+    version: 7,
+    up: `
+      -- Memory Links (Zettelkasten-style)
+      CREATE TABLE IF NOT EXISTS memory_links (
+        id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL REFERENCES memories(id),
+        target_id TEXT NOT NULL REFERENCES memories(id),
+        link_type TEXT NOT NULL CHECK (
+          link_type IN ('relates_to', 'contradicts', 'supports', 'extends', 'derived_from')
+        ),
+        strength REAL NOT NULL DEFAULT 1.0 CHECK (strength >= 0.0 AND strength <= 1.0),
+        bidirectional INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        created_by TEXT NOT NULL CHECK (created_by IN ('user', 'claude', 'system'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memory_links_source ON memory_links(source_id);
+      CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_id);
+      CREATE INDEX IF NOT EXISTS idx_memory_links_type ON memory_links(link_type);
+
+      -- Goal-specific fields on memories
+      ALTER TABLE memories ADD COLUMN goal_status TEXT CHECK (
+        goal_status IS NULL OR goal_status IN ('active', 'completed', 'abandoned')
+      );
+      ALTER TABLE memories ADD COLUMN goal_priority INTEGER CHECK (
+        goal_priority IS NULL OR (goal_priority >= 1 AND goal_priority <= 5)
+      );
+      ALTER TABLE memories ADD COLUMN parent_goal_id TEXT REFERENCES memories(id);
+
+      -- Checkpoint-specific fields
+      ALTER TABLE memories ADD COLUMN checkpoint_data TEXT;
+
+      -- Indexes for goals and checkpoints
+      CREATE INDEX IF NOT EXISTS idx_memories_goal_status ON memories(project_id, goal_status);
+      CREATE INDEX IF NOT EXISTS idx_memories_goal_priority ON memories(project_id, goal_priority);
+      CREATE INDEX IF NOT EXISTS idx_memories_parent_goal ON memories(parent_goal_id);
+
+      -- Update type constraint to allow goal and checkpoint
+      -- Note: SQLite doesn't support ALTER CONSTRAINT, but new inserts will use new CHECK
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_parent_goal;
+      DROP INDEX IF EXISTS idx_memories_goal_priority;
+      DROP INDEX IF EXISTS idx_memories_goal_status;
+      DROP INDEX IF EXISTS idx_memory_links_type;
+      DROP INDEX IF EXISTS idx_memory_links_target;
+      DROP INDEX IF EXISTS idx_memory_links_source;
+      DROP TABLE IF EXISTS memory_links;
+      -- Note: SQLite doesn't support DROP COLUMN directly
+      -- Columns remain but are unused after rollback
     `,
   },
 ];

@@ -8,7 +8,7 @@ import { rrfFusion } from '../../mcp/memory-server/src/search/rrf.js';
 import type { Memory, MemorySearchResult } from '../../mcp/memory-server/src/types.js';
 
 // Mock database connection wrapper with all migrations applied
-function createTestDb(): { instance: Database.Database; close: () => void } {
+function createTestDb(): { instance: Database.Database; close: () => void; transaction: <T>(fn: () => T) => T } {
   const db = new Database(':memory:');
   // Apply all migrations in order
   for (const migration of MIGRATIONS) {
@@ -17,6 +17,7 @@ function createTestDb(): { instance: Database.Database; close: () => void } {
   return {
     instance: db,
     close: () => db.close(),
+    transaction: <T>(fn: () => T): T => db.transaction(fn)(),
   };
 }
 

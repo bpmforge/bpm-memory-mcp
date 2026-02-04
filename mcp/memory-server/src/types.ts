@@ -10,6 +10,8 @@ export enum MemoryType {
   DECISION = 'decision',
   ERROR = 'error',
   PREFERENCE = 'preference',
+  GOAL = 'goal',
+  CHECKPOINT = 'checkpoint',
 }
 
 export enum EntityType {
@@ -27,6 +29,22 @@ export enum RelationType {
   CALLS = 'calls',
   CONTRADICTS = 'contradicts',
   SUPERSEDES = 'supersedes',
+}
+
+// Memory link types for Zettelkasten-style connections
+export enum MemoryLinkType {
+  RELATES_TO = 'relates_to',
+  CONTRADICTS = 'contradicts',
+  SUPPORTS = 'supports',
+  EXTENDS = 'extends',
+  DERIVED_FROM = 'derived_from',
+}
+
+// Goal status for goal anchoring system
+export enum GoalStatus {
+  ACTIVE = 'active',
+  COMPLETED = 'completed',
+  ABANDONED = 'abandoned',
 }
 
 export enum FeedbackType {
@@ -77,6 +95,73 @@ export interface CodeContext {
   sourceHash?: string; // Hash of file content at citation time (for staleness detection)
 }
 
+// ============================================================================
+// Memory Links (Zettelkasten-style)
+// ============================================================================
+
+export interface MemoryLink {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  linkType: MemoryLinkType;
+  strength: number; // 0-1
+  bidirectional: boolean;
+  createdAt: Date;
+  createdBy: 'user' | 'claude' | 'system';
+}
+
+export interface MemoryLinkCreateInput {
+  sourceId: string;
+  targetId: string;
+  linkType: MemoryLinkType;
+  strength?: number;
+  bidirectional?: boolean;
+  createdBy?: 'user' | 'claude' | 'system';
+}
+
+// ============================================================================
+// Goals (for drift prevention)
+// ============================================================================
+
+export interface GoalState {
+  id: string;
+  content: string;
+  priority: number; // 1-5 (1=highest)
+  status: GoalStatus;
+  progressNotes: string[];
+  createdAt: Date;
+  completedAt?: Date;
+  parentGoalId?: string;
+}
+
+export interface GoalCreateInput {
+  content: string;
+  priority?: number;
+  parentGoalId?: string;
+}
+
+// ============================================================================
+// Checkpoints (for task resumption)
+// ============================================================================
+
+export interface CheckpointState {
+  id: string;
+  taskId: string;
+  phase: string;
+  completedSteps: string[];
+  pendingSteps: string[];
+  artifacts: string[];
+  createdAt: Date;
+}
+
+export interface CheckpointCreateInput {
+  taskId: string;
+  phase: string;
+  completedSteps: string[];
+  pendingSteps: string[];
+  artifacts?: string[];
+}
+
 export interface Memory {
   id: string;
   content: string;
@@ -101,6 +186,11 @@ export interface Memory {
   flaggedAt: Date | null;
   flaggedReason: string | null;
   embeddingModel: string | null;
+  // V3 fields (goals and checkpoints)
+  goalStatus: GoalStatus | null;
+  goalPriority: number | null;
+  parentGoalId: string | null;
+  checkpointData: CheckpointState | null;
 }
 
 export interface MemoryFeedback {
@@ -185,6 +275,10 @@ export interface Session {
   conversationSummary: string;
   createdAt: Date;
   resumedAt: Date | null;
+  // V3 fields (goal anchoring)
+  activeGoals: GoalState[];
+  lastGoalCheck: Date | null;
+  driftHistory: number[]; // Track drift indicator over session
 }
 
 export interface WorkingMemory {
@@ -272,6 +366,8 @@ export interface SearchConfig {
 export const MemoryTypeSchema = z.nativeEnum(MemoryType);
 export const FeedbackTypeSchema = z.nativeEnum(FeedbackType);
 export const SymbolTypeSchema = z.nativeEnum(SymbolType);
+export const MemoryLinkTypeSchema = z.nativeEnum(MemoryLinkType);
+export const GoalStatusSchema = z.nativeEnum(GoalStatus);
 
 export const LanguageSchema = z.enum([
   'typescript', 'javascript', 'python', 'rust', 'go', 'java',
@@ -340,6 +436,35 @@ export const GraphQueryInputSchema = z.object({
   depth: z.number().int().min(1).max(5).optional().default(2),
 });
 
+// V3 Schemas for new MCP tools
+export const GoalAnchorInputSchema = z.object({
+  action: z.enum(['set', 'complete', 'check', 'list']),
+  content: z.string().min(1).max(2000).optional(),
+  priority: z.number().int().min(1).max(5).optional().default(3),
+  goalId: z.string().uuid().optional(),
+  note: z.string().max(500).optional(),
+});
+
+export const MemoryLinkInputSchema = z.object({
+  action: z.enum(['create', 'find_related', 'get_links']),
+  sourceId: z.string().uuid().optional(),
+  targetId: z.string().uuid().optional(),
+  linkType: MemoryLinkTypeSchema.optional(),
+  strength: z.number().min(0).max(1).optional().default(1.0),
+  bidirectional: z.boolean().optional().default(false),
+  memoryId: z.string().uuid().optional(), // For find_related and get_links
+  depth: z.number().int().min(1).max(3).optional().default(2),
+});
+
+export const CheckpointTaskInputSchema = z.object({
+  action: z.enum(['save', 'restore', 'list']),
+  taskId: z.string().min(1).max(200).optional(),
+  phase: z.string().min(1).max(100).optional(),
+  completedSteps: z.array(z.string().max(500)).optional(),
+  pendingSteps: z.array(z.string().max(500)).optional(),
+  artifacts: z.array(z.string().max(500)).optional(),
+});
+
 // Type exports from Zod schemas
 export type MemoryStoreInput = z.infer<typeof MemoryStoreInputSchema>;
 export type MemoryRecallInput = z.infer<typeof MemoryRecallInputSchema>;
@@ -348,3 +473,6 @@ export type MemoryUpdateInput = z.infer<typeof MemoryUpdateInputSchema>;
 export type MemoryFeedbackInput = z.infer<typeof MemoryFeedbackInputSchema>;
 export type SessionSaveInput = z.infer<typeof SessionSaveInputSchema>;
 export type GraphQueryInput = z.infer<typeof GraphQueryInputSchema>;
+export type GoalAnchorInput = z.infer<typeof GoalAnchorInputSchema>;
+export type MemoryLinkInput = z.infer<typeof MemoryLinkInputSchema>;
+export type CheckpointTaskInput = z.infer<typeof CheckpointTaskInputSchema>;

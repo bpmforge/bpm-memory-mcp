@@ -5,7 +5,7 @@ import { MIGRATIONS } from '../../mcp/memory-server/src/storage/schema.js';
 import type { MemoryType } from '../../mcp/memory-server/src/types.js';
 
 // Create a mock DatabaseConnection interface with all migrations applied
-function createTestDb(): { instance: Database.Database; close: () => void } {
+function createTestDb(): { instance: Database.Database; close: () => void; transaction: <T>(fn: () => T) => T } {
   const db = new Database(':memory:');
   // Apply all migrations in order
   for (const migration of MIGRATIONS) {
@@ -14,6 +14,7 @@ function createTestDb(): { instance: Database.Database; close: () => void } {
   return {
     instance: db,
     close: () => db.close(),
+    transaction: <T>(fn: () => T): T => db.transaction(fn)(),
   };
 }
 
