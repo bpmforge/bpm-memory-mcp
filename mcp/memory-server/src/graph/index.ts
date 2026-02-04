@@ -8,6 +8,8 @@ export { EntityRepository } from './entities.js';
 export { RelationRepository } from './relations.js';
 export { MemoryGraphService } from './memory-graph.js';
 export type { MemoryGraphStats, ContradictionPair, MemoryChain, MemoryCluster } from './memory-graph.js';
+export { KnowledgeGraphPopulator } from './populator.js';
+export type { PopulationResult, PopulatorConfig } from './populator.js';
 
 export interface SubgraphResult {
   entities: Entity[];

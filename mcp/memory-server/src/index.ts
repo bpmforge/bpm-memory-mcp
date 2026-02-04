@@ -9,8 +9,8 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { connectionPool, runMigrations, getProjectId } from './storage/index.js';
-import { EmbeddingService } from './embeddings/index.js';
+import { connectionPool, runMigrations, getProjectId, GLOBAL_PROJECT_ID, listAllProjects, getProjectMetadata } from './storage/index.js';
+import { EmbeddingService, loadConfig } from './embeddings/index.js';
 import { HybridSearch } from './search/index.js';
 import { MemoryRepository } from './storage/repository.js';
 import { SessionRepository } from './storage/session.js';
@@ -31,6 +31,7 @@ import {
   CheckpointTaskInputSchema,
   FeedbackType,
   MemoryLinkType,
+  MemoryScope,
   type MemoryCreateInput,
   type SearchOptions,
   type CodeContext,
@@ -41,10 +42,47 @@ import { MemoryLinkRepository } from './storage/links.js';
 import { CheckpointRepository } from './checkpoint/index.js';
 import { ContradictionDetector } from './validation/contradictions.js';
 import { AutoLinker } from './linking/index.js';
-import { MemoryGraphService } from './graph/index.js';
+import { extractMemories, detectCitation } from './extraction/index.js';
+import { ConsolidationService, type ConsolidationOptions } from './consolidation/index.js';
+import { MemoryGraphService, KnowledgeGraphPopulator, type PopulationResult } from './graph/index.js';
 
 // Storage quota: maximum memories per project
 const MAX_MEMORIES_PER_PROJECT = 10000;
+
+// Common stop words to filter from keyword extraction
+const STOP_WORDS = new Set([
+  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+  'may', 'might', 'must', 'shall', 'can', 'need', 'dare', 'ought', 'used',
+  'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into',
+  'through', 'during', 'before', 'after', 'above', 'below', 'between',
+  'and', 'but', 'or', 'nor', 'so', 'yet', 'both', 'either', 'neither',
+  'not', 'only', 'own', 'same', 'than', 'too', 'very', 'just', 'also',
+  'this', 'that', 'these', 'those', 'it', 'its', 'i', 'we', 'you', 'he', 'she', 'they',
+]);
+
+/**
+ * Extract keywords from text for auto-recall queries
+ */
+function extractKeywords(text: string, maxKeywords: number = 5): string[] {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+
+  // Count word frequency
+  const freq = new Map<string, number>();
+  for (const word of words) {
+    freq.set(word, (freq.get(word) ?? 0) + 1);
+  }
+
+  // Sort by frequency and return top N
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxKeywords)
+    .map(([word]) => word);
+}
 
 // Benchmark mode: disable hardening for comparison testing
 // WARNING: Only use for benchmarking - never in production
@@ -70,6 +108,8 @@ let lastGoalCheck: Date | null = null;
 let autoLinker: AutoLinker | null = null;
 // V5 services for graph queries
 let memoryGraphService: MemoryGraphService | null = null;
+// V11 knowledge graph population
+let knowledgeGraphPopulator: KnowledgeGraphPopulator | null = null;
 
 /**
  * Initialize services for a project
@@ -85,9 +125,10 @@ async function initializeForProject(projectId: string): Promise<void> {
   // Run migrations
   runMigrations(db);
 
-  // Initialize services
+  // Initialize services with saved config
+  const config = loadConfig();
   embeddingService = new EmbeddingService(db);
-  await embeddingService.initialize();
+  await embeddingService.initialize(config.embedding);
 
   hybridSearch = new HybridSearch(db, embeddingService);
   memoryRepository = new MemoryRepository(db);
@@ -103,11 +144,50 @@ async function initializeForProject(projectId: string): Promise<void> {
   autoLinker = new AutoLinker(db);
   // V5 services
   memoryGraphService = new MemoryGraphService(db);
+  // V11 services
+  knowledgeGraphPopulator = new KnowledgeGraphPopulator(db);
 
   // Initialize core memory if needed
   if (!coreMemoryRepository.isInitialized(projectId)) {
     coreMemoryRepository.initializeDefaults(projectId);
   }
+}
+
+// Global scope services (lazily initialized)
+let globalEmbeddingService: EmbeddingService | null = null;
+let globalHybridSearch: HybridSearch | null = null;
+let globalMemoryRepository: MemoryRepository | null = null;
+
+/**
+ * Initialize and get services for global scope
+ */
+async function initializeGlobalScope(): Promise<{
+  embeddingService: EmbeddingService;
+  hybridSearch: HybridSearch;
+  memoryRepository: MemoryRepository;
+}> {
+  if (globalEmbeddingService && globalHybridSearch && globalMemoryRepository) {
+    return { embeddingService: globalEmbeddingService, hybridSearch: globalHybridSearch, memoryRepository: globalMemoryRepository };
+  }
+
+  const db = connectionPool.get(GLOBAL_PROJECT_ID);
+  runMigrations(db);
+
+  const config = loadConfig();
+  globalEmbeddingService = new EmbeddingService(db);
+  await globalEmbeddingService.initialize(config.embedding);
+
+  globalHybridSearch = new HybridSearch(db, globalEmbeddingService);
+  globalMemoryRepository = new MemoryRepository(db);
+
+  return { embeddingService: globalEmbeddingService, hybridSearch: globalHybridSearch, memoryRepository: globalMemoryRepository };
+}
+
+/**
+ * Get the effective project ID based on scope
+ */
+function getEffectiveProjectId(scope: string | undefined, currentProjectId: string): string {
+  return scope === 'global' ? GLOBAL_PROJECT_ID : currentProjectId;
 }
 
 /**
@@ -161,6 +241,11 @@ function createServer(): Server {
               },
               description: 'Structured code context (auto-parsed from citation if not provided)',
             },
+            scope: {
+              type: 'string',
+              enum: ['project', 'global'],
+              description: 'Memory scope: "project" (default) for project-specific, "global" for cross-project memories',
+            },
           },
           required: ['content'],
         },
@@ -187,6 +272,11 @@ function createServer(): Server {
             },
             includeStale: { type: 'boolean', description: 'Include flagged-stale memories (default: false)' },
             includeSuperseded: { type: 'boolean', description: 'Include superseded versions (default: false)' },
+            scope: {
+              type: 'string',
+              enum: ['project', 'global', 'both', 'all'],
+              description: 'Search scope: "project" for current project only, "global" for global memories only, "both" (default) for project + global, "all" for ALL projects (cross-project search)',
+            },
           },
           required: ['query'],
         },
@@ -284,14 +374,14 @@ function createServer(): Server {
       },
       {
         name: 'memory_link',
-        description: 'Create and query Zettelkasten-style links between memories. Supports graph queries for contradictions, chains, clusters, and statistics.',
+        description: 'Create and query Zettelkasten-style links between memories. Supports graph queries for contradictions, chains, clusters, statistics, and knowledge graph entities.',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['create', 'find_related', 'get_links', 'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans'],
-              description: 'Action: create/find_related/get_links (basic), get_stats/find_contradictions/find_chain/find_cluster/find_orphans (graph queries)',
+              enum: ['create', 'find_related', 'get_links', 'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans', 'get_entities', 'find_by_entity'],
+              description: 'Action: create/find_related/get_links (basic), get_stats/find_contradictions/find_chain/find_cluster/find_orphans (graph), get_entities/find_by_entity (knowledge graph)',
             },
             sourceId: { type: 'string', format: 'uuid', description: 'Source memory ID (for "create")' },
             targetId: { type: 'string', format: 'uuid', description: 'Target memory ID (for "create")' },
@@ -302,7 +392,9 @@ function createServer(): Server {
             },
             strength: { type: 'number', minimum: 0, maximum: 1, description: 'Link strength 0-1' },
             bidirectional: { type: 'boolean', description: 'Whether link works both directions' },
-            memoryId: { type: 'string', format: 'uuid', description: 'Memory ID (for find_related/get_links/find_chain/find_cluster)' },
+            memoryId: { type: 'string', format: 'uuid', description: 'Memory ID (for find_related/get_links/find_chain/find_cluster/get_entities)' },
+            entityName: { type: 'string', description: 'Entity name to search (for find_by_entity, e.g., file path or function name)' },
+            entityType: { type: 'string', enum: ['file', 'function', 'type', 'decision', 'error'], description: 'Entity type filter (for find_by_entity)' },
             depth: { type: 'integer', minimum: 1, maximum: 3, description: 'Traversal depth' },
             linkTypes: {
               type: 'array',
@@ -350,6 +442,123 @@ function createServer(): Server {
           required: ['action'],
         },
       },
+      // V8: Project management tools
+      {
+        name: 'memory_list_projects',
+        description: 'List all projects with memory databases. Shows project IDs, database sizes, and memory counts.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      {
+        name: 'memory_migrate',
+        description: 'Move or copy a memory from one scope/project to another',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            memoryId: { type: 'string', format: 'uuid', description: 'ID of memory to migrate' },
+            targetScope: {
+              type: 'string',
+              enum: ['project', 'global'],
+              description: 'Target scope for the memory',
+            },
+            action: {
+              type: 'string',
+              enum: ['move', 'copy'],
+              description: 'Whether to move (delete original) or copy (keep original)',
+            },
+          },
+          required: ['memoryId', 'targetScope', 'action'],
+        },
+      },
+      // V9: Auto-extraction tools
+      {
+        name: 'memory_auto_extract',
+        description: 'Analyze text and automatically extract memories. Returns candidates for review or auto-stores them.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: 'Text to analyze (conversation, error output, code changes, etc.)' },
+            context: { type: 'string', description: 'Optional context about what was happening' },
+            source: {
+              type: 'string',
+              enum: ['conversation', 'error', 'code_change', 'session_summary'],
+              description: 'Source type to guide extraction',
+            },
+            autoStore: {
+              type: 'boolean',
+              description: 'If true, automatically store extracted memories. If false, just return candidates for review.',
+            },
+            minConfidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+              description: 'Minimum confidence threshold for auto-storage (default: 0.7)',
+            },
+          },
+          required: ['content', 'source'],
+        },
+      },
+      // V9: Proactive context assembly
+      {
+        name: 'memory_context_assemble',
+        description: 'Assemble relevant memory context for a task. Call this BEFORE starting significant work to get relevant past decisions, patterns, and constraints. Returns formatted context to consider.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            task: { type: 'string', description: 'Description of the task or question to address' },
+            files: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'File paths that will be involved (for targeted recall)',
+            },
+            includeGlobal: {
+              type: 'boolean',
+              description: 'Include global memories (default: true)',
+            },
+            maxMemories: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 20,
+              description: 'Maximum memories to include (default: 10)',
+            },
+          },
+          required: ['task'],
+        },
+      },
+      // V10: Memory consolidation
+      {
+        name: 'memory_consolidate',
+        description: 'Run memory consolidation: merge duplicates, decay unused memories, identify clusters for summarization. Run periodically to keep memory healthy.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            duplicateThreshold: {
+              type: 'number',
+              minimum: 0.5,
+              maximum: 1.0,
+              description: 'Similarity threshold for duplicate detection (default: 0.85)',
+            },
+            decayAfterDays: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 365,
+              description: 'Days since last access before decay starts (default: 30)',
+            },
+            decayRate: {
+              type: 'number',
+              minimum: 0.001,
+              maximum: 0.1,
+              description: 'Confidence decay rate per day (default: 0.01)',
+            },
+            dryRun: {
+              type: 'boolean',
+              description: 'If true, report what would happen without making changes (default: false)',
+            },
+          },
+        },
+      },
     ],
   }));
 
@@ -375,6 +584,12 @@ function createServer(): Server {
         case 'memory_store': {
           const input = MemoryStoreInputSchema.parse(args);
 
+          // V6: Determine scope - use global or project services
+          const isGlobal = input.scope === MemoryScope.GLOBAL;
+          const targetProjectId = isGlobal ? GLOBAL_PROJECT_ID : projectId;
+          const targetRepo = isGlobal ? (await initializeGlobalScope()).memoryRepository : memoryRepository;
+          const targetEmbedding = isGlobal ? (await initializeGlobalScope()).embeddingService : embeddingService;
+
           // Security checks (can be disabled for benchmarking)
           if (!HARDENING_DISABLED) {
             // Security: Check for credentials (SC-001)
@@ -397,7 +612,7 @@ function createServer(): Server {
             }
 
             // Security: Check storage quota
-            if (memoryRepository.getMemoryCount(projectId) >= MAX_MEMORIES_PER_PROJECT) {
+            if (targetRepo.getMemoryCount(targetProjectId) >= MAX_MEMORIES_PER_PROJECT) {
               return {
                 content: [{ type: 'text', text: `Error: Storage limit reached (${MAX_MEMORIES_PER_PROJECT} memories). Consider archiving or deleting old memories.` }],
                 isError: true,
@@ -405,10 +620,10 @@ function createServer(): Server {
             }
           }
 
-          const embedding = await embeddingService.embed(input.content);
+          const embedding = await targetEmbedding.embed(input.content);
 
           // Check for duplicate
-          if (memoryRepository.isDuplicateContent(input.content, projectId)) {
+          if (targetRepo.isDuplicateContent(input.content, targetProjectId)) {
             return {
               content: [{ type: 'text', text: 'Memory already exists (duplicate content)' }],
             };
@@ -419,7 +634,7 @@ function createServer(): Server {
             content: input.content,
             type: input.type,
             confidence: input.confidence,
-            projectId,
+            projectId: targetProjectId,
           };
           if (input.citation) memoryInput.citation = input.citation;
           // V2 fields (language and codeContext auto-detected in repository if not provided)
@@ -442,11 +657,11 @@ function createServer(): Server {
             memories: Array<{ id: string; similarity: number; reason: string }>;
           } | null = null;
 
-          if (contradictionDetector && embedding && !HARDENING_DISABLED) {
+          if (contradictionDetector && embedding && !HARDENING_DISABLED && !isGlobal) {
             const contradictions = await contradictionDetector.detectOnStore(
               input.content,
               embedding,
-              projectId
+              targetProjectId
             );
 
             if (contradictions.length > 0) {
@@ -461,7 +676,7 @@ function createServer(): Server {
             }
           }
 
-          const memory = memoryRepository.createMemory(memoryInput, embedding, projectRoot);
+          const memory = targetRepo.createMemory(memoryInput, embedding, isGlobal ? undefined : projectRoot);
 
           // V4: Auto-link to related memories
           let autoLinkResult: {
@@ -470,12 +685,13 @@ function createServer(): Server {
             suggestions: Array<{ targetId: string; similarity: number; reason: string }>;
           } | null = null;
 
-          if (autoLinker && embedding && !HARDENING_DISABLED) {
+          // V6: Skip auto-linking for global memories (no cross-project linking)
+          if (autoLinker && embedding && !HARDENING_DISABLED && !isGlobal) {
             const linkResult = await autoLinker.processNewMemory(
               memory.id,
               memory.content,
               embedding,
-              projectId
+              targetProjectId
             );
 
             if (linkResult.createdLinks.length > 0 || linkResult.suggestedLinks.length > 0) {
@@ -490,6 +706,33 @@ function createServer(): Server {
                   targetId: s.targetId,
                   similarity: s.similarity,
                   reason: s.reason,
+                })),
+              };
+            }
+          }
+
+          // V11: Populate knowledge graph with entities from citation/content
+          let graphPopulationResult: {
+            entitiesCreated: number;
+            relationsCreated: number;
+            entities: Array<{ name: string; type: string; isNew: boolean }>;
+          } | null = null;
+
+          // Skip graph population for global memories (no cross-project entities)
+          if (knowledgeGraphPopulator && !HARDENING_DISABLED && !isGlobal) {
+            const populationResult = await knowledgeGraphPopulator.populateFromMemory(
+              memory,
+              memory.codeContext
+            );
+
+            if (populationResult.entitiesCreated.length > 0) {
+              graphPopulationResult = {
+                entitiesCreated: populationResult.entitiesCreated.length,
+                relationsCreated: populationResult.relationsCreated.length,
+                entities: populationResult.entitiesCreated.slice(0, 5).map((e) => ({
+                  name: e.name,
+                  type: e.type,
+                  isNew: e.isNew,
                 })),
               };
             }
@@ -511,6 +754,8 @@ function createServer(): Server {
                   contradictionWarning,
                   // V4 response fields
                   autoLinks: autoLinkResult,
+                  // V11 response fields
+                  graphPopulation: graphPopulationResult,
                 }),
               },
             ],
@@ -520,44 +765,139 @@ function createServer(): Server {
         case 'memory_recall': {
           const input = MemoryRecallInputSchema.parse(args);
 
-          // Build search options, only including defined optional properties
-          const searchOptions: SearchOptions = {
-            projectId,
+          // V6/V8: Determine which scopes to search
+          const searchScope = input.scope ?? 'both';
+          const searchProject = searchScope === 'project' || searchScope === 'both';
+          const searchGlobal = searchScope === 'global' || searchScope === 'both';
+          const searchAll = searchScope === 'all';
+
+          // Build base search options (only add type/language if defined)
+          const baseOptions: Partial<SearchOptions> = {
             limit: input.limit,
             minConfidence: input.minConfidence,
-            // V2 filters
             includeStale: input.includeStale,
             includeSuperseded: input.includeSuperseded,
           };
-          if (input.type) searchOptions.type = input.type;
-          if (input.language) searchOptions.language = input.language;
+          if (input.type) baseOptions.type = input.type;
+          if (input.language) baseOptions.language = input.language;
 
-          const response = await hybridSearch.search(input.query, searchOptions);
+          // Collect results from scopes
+          type MemoryResult = { id: string; content: string; type: string; confidence: number; citation: string | null; relevance: number; language: string | null; version: number; isSuperseded: boolean; isStale: boolean; scope: string; projectId?: string };
+          let allResults: MemoryResult[] = [];
+          let combinedStats = { vectorMatches: 0, bm25Matches: 0, fusedResults: 0, latencyMs: 0, projectsSearched: 1 };
 
-          // Update access stats for returned memories
-          for (const result of response.memories) {
-            memoryRepository.updateAccessStats(result.memory.id);
+          // V8: Cross-project search (all projects)
+          if (searchAll) {
+            const allProjectIds = listAllProjects();
+            combinedStats.projectsSearched = allProjectIds.length;
+
+            for (const pid of allProjectIds) {
+              try {
+                // Initialize services for this project
+                const db = connectionPool.get(pid);
+                runMigrations(db);
+                const config = loadConfig();
+                const projEmbedding = new EmbeddingService(db);
+                await projEmbedding.initialize(config.embedding);
+                const projSearch = new HybridSearch(db, projEmbedding);
+                const projRepo = new MemoryRepository(db);
+
+                const searchOptions: SearchOptions = { ...baseOptions, projectId: pid } as SearchOptions;
+                const response = await projSearch.search(input.query, searchOptions);
+
+                for (const result of response.memories) {
+                  projRepo.updateAccessStats(result.memory.id);
+                  allResults.push({
+                    id: result.memory.id,
+                    content: result.memory.content,
+                    type: result.memory.type,
+                    confidence: result.memory.confidence,
+                    citation: result.memory.citation,
+                    relevance: result.relevance,
+                    language: result.memory.language,
+                    version: result.memory.version,
+                    isSuperseded: !!result.memory.supersededBy,
+                    isStale: !!result.memory.flaggedAt,
+                    scope: pid === GLOBAL_PROJECT_ID ? 'global' : 'project',
+                    projectId: pid,
+                  });
+                }
+                combinedStats.vectorMatches += response.searchStats.vectorMatches;
+                combinedStats.bm25Matches += response.searchStats.bm25Matches;
+                combinedStats.fusedResults += response.searchStats.fusedResults;
+                combinedStats.latencyMs += response.searchStats.latencyMs;
+              } catch {
+                // Skip projects that fail to initialize
+              }
+            }
+          } else {
+            // Search current project scope
+            if (searchProject) {
+              const searchOptions: SearchOptions = { ...baseOptions, projectId } as SearchOptions;
+              const response = await hybridSearch.search(input.query, searchOptions);
+
+              for (const result of response.memories) {
+                memoryRepository.updateAccessStats(result.memory.id);
+                allResults.push({
+                  id: result.memory.id,
+                  content: result.memory.content,
+                  type: result.memory.type,
+                  confidence: result.memory.confidence,
+                  citation: result.memory.citation,
+                  relevance: result.relevance,
+                  language: result.memory.language,
+                  version: result.memory.version,
+                  isSuperseded: !!result.memory.supersededBy,
+                  isStale: !!result.memory.flaggedAt,
+                  scope: 'project',
+                });
+              }
+              combinedStats.vectorMatches += response.searchStats.vectorMatches;
+              combinedStats.bm25Matches += response.searchStats.bm25Matches;
+              combinedStats.fusedResults += response.searchStats.fusedResults;
+              combinedStats.latencyMs += response.searchStats.latencyMs;
+            }
+
+            // Search global scope
+            if (searchGlobal) {
+              const globalServices = await initializeGlobalScope();
+              const searchOptions: SearchOptions = { ...baseOptions, projectId: GLOBAL_PROJECT_ID } as SearchOptions;
+              const response = await globalServices.hybridSearch.search(input.query, searchOptions);
+
+              for (const result of response.memories) {
+                globalServices.memoryRepository.updateAccessStats(result.memory.id);
+                allResults.push({
+                  id: result.memory.id,
+                  content: result.memory.content,
+                  type: result.memory.type,
+                  confidence: result.memory.confidence,
+                  citation: result.memory.citation,
+                  relevance: result.relevance,
+                  language: result.memory.language,
+                  version: result.memory.version,
+                  isSuperseded: !!result.memory.supersededBy,
+                  isStale: !!result.memory.flaggedAt,
+                  scope: 'global',
+                });
+              }
+              combinedStats.vectorMatches += response.searchStats.vectorMatches;
+              combinedStats.bm25Matches += response.searchStats.bm25Matches;
+              combinedStats.fusedResults += response.searchStats.fusedResults;
+              combinedStats.latencyMs += response.searchStats.latencyMs;
+            }
           }
+
+          // Sort by relevance and limit
+          allResults.sort((a, b) => b.relevance - a.relevance);
+          allResults = allResults.slice(0, input.limit);
 
           return {
             content: [
               {
                 type: 'text',
                 text: JSON.stringify({
-                  memories: response.memories.map((r) => ({
-                    id: r.memory.id,
-                    content: r.memory.content,
-                    type: r.memory.type,
-                    confidence: r.memory.confidence,
-                    citation: r.memory.citation,
-                    relevance: r.relevance,
-                    // V2 response fields
-                    language: r.memory.language,
-                    version: r.memory.version,
-                    isSuperseded: !!r.memory.supersededBy,
-                    isStale: !!r.memory.flaggedAt,
-                  })),
-                  stats: response.searchStats,
+                  memories: allResults,
+                  stats: combinedStats,
                 }),
               },
             ],
@@ -566,14 +906,28 @@ function createServer(): Server {
 
         case 'memory_forget': {
           const input = MemoryForgetInputSchema.parse(args);
-          const success = memoryRepository.softDelete(input.id, projectId, input.reason);
+
+          // Try project scope first
+          let success = memoryRepository.softDelete(input.id, projectId, input.reason);
+          let scope = 'project';
+
+          // If not found in project, try global scope
+          if (!success) {
+            try {
+              const globalServices = await initializeGlobalScope();
+              success = globalServices.memoryRepository.softDelete(input.id, GLOBAL_PROJECT_ID, input.reason);
+              scope = 'global';
+            } catch {
+              // Global scope not available
+            }
+          }
 
           return {
             content: [
               {
                 type: 'text',
                 text: success
-                  ? `Memory ${input.id} marked as deleted`
+                  ? `Memory ${input.id} marked as deleted (${scope} scope)`
                   : `Memory ${input.id} not found or already deleted`,
               },
             ],
@@ -582,16 +936,18 @@ function createServer(): Server {
 
         case 'memory_update': {
           const input = MemoryUpdateInputSchema.parse(args);
-          const embedding = await embeddingService.embed(input.content);
 
-          // V2: Create superseding memory instead of in-place update
-          try {
+          // Try project scope first
+          const projectMemory = memoryRepository.findById(input.id, projectId);
+
+          if (projectMemory) {
+            const embedding = await embeddingService.embed(input.content);
             const newMemory = memoryRepository.createSupersedingMemory(
               input.id,
               projectId,
               input.content,
               embedding,
-              input.language, // Honor new language if provided
+              input.language,
               projectRoot
             );
 
@@ -604,48 +960,133 @@ function createServer(): Server {
                     version: newMemory.version,
                     supersedesId: newMemory.supersedesId,
                     language: newMemory.language,
+                    scope: 'project',
                     message: `Memory updated to version ${newMemory.version}`,
                   }),
                 },
               ],
             };
-          } catch (error) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Memory ${input.id} not found`,
-                },
-              ],
-            };
           }
+
+          // Try global scope
+          try {
+            const globalServices = await initializeGlobalScope();
+            const globalMemory = globalServices.memoryRepository.findById(input.id, GLOBAL_PROJECT_ID);
+
+            if (globalMemory) {
+              const embedding = await globalServices.embeddingService.embed(input.content);
+              const newMemory = globalServices.memoryRepository.createSupersedingMemory(
+                input.id,
+                GLOBAL_PROJECT_ID,
+                input.content,
+                embedding,
+                input.language,
+                undefined // No project root for global
+              );
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      id: newMemory.id,
+                      version: newMemory.version,
+                      supersedesId: newMemory.supersedesId,
+                      language: newMemory.language,
+                      scope: 'global',
+                      message: `Memory updated to version ${newMemory.version}`,
+                    }),
+                  },
+                ],
+              };
+            }
+          } catch {
+            // Global scope not available
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Memory ${input.id} not found in project or global scope`,
+              },
+            ],
+          };
         }
 
         case 'memory_feedback': {
           const input = MemoryFeedbackInputSchema.parse(args);
 
-          // Record feedback and adjust confidence
-          const feedback = memoryRepository.recordFeedback(
-            input.id,
-            projectId,
-            input.feedback as FeedbackType,
-            input.correction,
-            input.duplicateOf
-          );
-
-          // If correction provided for wrong/outdated, create superseding memory
+          // Try project scope first
+          const projectMemory = memoryRepository.findById(input.id, projectId);
+          let scope = 'project';
+          let feedback;
           let newMemoryId: string | null = null;
-          if (input.correction && (input.feedback === 'wrong' || input.feedback === 'outdated')) {
-            const embedding = await embeddingService.embed(input.correction);
-            const newMemory = memoryRepository.createSupersedingMemory(
+
+          if (projectMemory) {
+            feedback = memoryRepository.recordFeedback(
               input.id,
               projectId,
+              input.feedback as FeedbackType,
               input.correction,
-              embedding,
-              undefined, // Keep existing language
-              projectRoot
+              input.duplicateOf
             );
-            newMemoryId = newMemory.id;
+
+            if (input.correction && (input.feedback === 'wrong' || input.feedback === 'outdated')) {
+              const embedding = await embeddingService.embed(input.correction);
+              const newMemory = memoryRepository.createSupersedingMemory(
+                input.id,
+                projectId,
+                input.correction,
+                embedding,
+                undefined,
+                projectRoot
+              );
+              newMemoryId = newMemory.id;
+            }
+          } else {
+            // Try global scope
+            try {
+              const globalServices = await initializeGlobalScope();
+              const globalMemory = globalServices.memoryRepository.findById(input.id, GLOBAL_PROJECT_ID);
+
+              if (globalMemory) {
+                scope = 'global';
+                feedback = globalServices.memoryRepository.recordFeedback(
+                  input.id,
+                  GLOBAL_PROJECT_ID,
+                  input.feedback as FeedbackType,
+                  input.correction,
+                  input.duplicateOf
+                );
+
+                if (input.correction && (input.feedback === 'wrong' || input.feedback === 'outdated')) {
+                  const embedding = await globalServices.embeddingService.embed(input.correction);
+                  const newMemory = globalServices.memoryRepository.createSupersedingMemory(
+                    input.id,
+                    GLOBAL_PROJECT_ID,
+                    input.correction,
+                    embedding,
+                    undefined,
+                    undefined
+                  );
+                  newMemoryId = newMemory.id;
+                }
+              }
+            } catch {
+              // Global scope not available
+            }
+          }
+
+          if (!feedback) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Memory ${input.id} not found in project or global scope`,
+                },
+              ],
+            };
           }
 
           return {
@@ -657,9 +1098,10 @@ function createServer(): Server {
                   feedbackType: feedback.feedbackType,
                   confidenceDelta: feedback.confidenceDelta,
                   newMemoryId,
+                  scope,
                   message: newMemoryId
-                    ? `Feedback recorded. New corrected memory created: ${newMemoryId}`
-                    : `Feedback recorded. Confidence adjusted by ${feedback.confidenceDelta}`,
+                    ? `Feedback recorded (${scope}). New corrected memory created: ${newMemoryId}`
+                    : `Feedback recorded (${scope}). Confidence adjusted by ${feedback.confidenceDelta}`,
                 }),
               },
             ],
@@ -683,6 +1125,46 @@ function createServer(): Server {
           // Prune old sessions to keep storage bounded
           sessionRepository.pruneOldSessions(projectId, 10);
 
+          // V9: Auto-extract memories from session summary
+          let extractedMemories: Array<{ id: string; type: string; confidence: number }> = [];
+
+          if (summary && summary.length > 50 && !HARDENING_DISABLED) {
+            const result = extractMemories(summary, 'session_summary');
+
+            // Auto-store high-confidence extractions (>= 0.75)
+            for (const candidate of result.candidates) {
+              if (candidate.confidence >= 0.75) {
+                try {
+                  const citation = detectCitation(candidate.content);
+                  const embedding = await embeddingService.embed(candidate.content);
+
+                  const createInput: MemoryCreateInput = {
+                    content: candidate.content,
+                    type: candidate.type,
+                    confidence: candidate.confidence,
+                    projectId,
+                  };
+                  if (citation) createInput.citation = citation;
+
+                  const memory = memoryRepository.createMemory(createInput, embedding, projectRoot);
+
+                  // Auto-link
+                  if (autoLinker && embedding) {
+                    await autoLinker.processNewMemory(memory.id, memory.content, embedding, projectId);
+                  }
+
+                  extractedMemories.push({
+                    id: memory.id,
+                    type: memory.type,
+                    confidence: memory.confidence,
+                  });
+                } catch {
+                  // Skip failed extractions
+                }
+              }
+            }
+          }
+
           return {
             content: [
               {
@@ -690,7 +1172,10 @@ function createServer(): Server {
                 text: JSON.stringify({
                   sessionId,
                   summary,
-                  message: 'Session saved successfully',
+                  extractedMemories,
+                  message: extractedMemories.length > 0
+                    ? `Session saved. Auto-extracted ${extractedMemories.length} memories.`
+                    : 'Session saved successfully',
                 }),
               },
             ],
@@ -719,6 +1204,60 @@ function createServer(): Server {
             // V3: Include active goals even for new sessions
             const activeGoals = goalRepository?.getActiveGoals(projectId) ?? [];
 
+            // V7: Auto-recall for new sessions (project name only)
+            let autoRecalledMemories: Array<{ id: string; content: string; type: string; relevance: number; scope: string }> = [];
+            if (hybridSearch && !HARDENING_DISABLED) {
+              const projectName = projectRoot.split('/').pop() ?? 'project';
+              const query = `${projectName} project status decisions constraints`;
+
+              const searchOptions: SearchOptions = {
+                projectId,
+                limit: 7,
+                minConfidence: 0.3,
+              };
+              const response = await hybridSearch.search(query, searchOptions);
+
+              for (const result of response.memories) {
+                autoRecalledMemories.push({
+                  id: result.memory.id,
+                  content: result.memory.content.length > 200
+                    ? result.memory.content.substring(0, 200) + '...'
+                    : result.memory.content,
+                  type: result.memory.type,
+                  relevance: Math.round(result.relevance * 100) / 100,
+                  scope: 'project',
+                });
+              }
+
+              // Also search global
+              try {
+                const globalServices = await initializeGlobalScope();
+                const globalSearchOptions: SearchOptions = {
+                  projectId: GLOBAL_PROJECT_ID,
+                  limit: 3,
+                  minConfidence: 0.3,
+                };
+                const globalResponse = await globalServices.hybridSearch.search(query, globalSearchOptions);
+
+                for (const result of globalResponse.memories) {
+                  autoRecalledMemories.push({
+                    id: result.memory.id,
+                    content: result.memory.content.length > 200
+                      ? result.memory.content.substring(0, 200) + '...'
+                      : result.memory.content,
+                    type: result.memory.type,
+                    relevance: Math.round(result.relevance * 100) / 100,
+                    scope: 'global',
+                  });
+                }
+              } catch {
+                // Global search failed, continue with project-only
+              }
+
+              autoRecalledMemories.sort((a, b) => b.relevance - a.relevance);
+              autoRecalledMemories = autoRecalledMemories.slice(0, 10);
+            }
+
             return {
               content: [
                 {
@@ -732,6 +1271,8 @@ function createServer(): Server {
                       content: g.content,
                       priority: g.priority,
                     })),
+                    // V7: Auto-recalled memories
+                    autoRecalledMemories,
                   }),
                 },
               ],
@@ -764,6 +1305,8 @@ function createServer(): Server {
             graphStats: { totalMemories: number; linkedMemories: number; contradictionCount: number } | null;
             recentContradictions: Array<{ source: string; target: string }>;
             incompleteCheckpoints: Array<{ taskId: string; phase: string; pendingSteps: number }>;
+            // V7: Auto-recalled memories
+            autoRecalledMemories: Array<{ id: string; content: string; type: string; relevance: number; scope: string }>;
           } | null = null;
 
           if (memoryGraphService && !HARDENING_DISABLED) {
@@ -773,6 +1316,65 @@ function createServer(): Server {
             const incompleteCheckpoints = checkpoints
               .filter((c) => c.pendingSteps.length > 0)
               .slice(0, 3);
+
+            // V7: Auto-recall relevant memories based on project context
+            let autoRecalledMemories: Array<{ id: string; content: string; type: string; relevance: number; scope: string }> = [];
+
+            if (hybridSearch) {
+              // Build query from project context
+              const projectName = projectRoot.split('/').pop() ?? 'project';
+              const summaryKeywords = extractKeywords(session.conversationSummary, 5);
+              const query = [projectName, 'project status decisions constraints', ...summaryKeywords].join(' ');
+
+              // Search project scope
+              const searchOptions: SearchOptions = {
+                projectId,
+                limit: 7,
+                minConfidence: 0.3,
+              };
+              const response = await hybridSearch.search(query, searchOptions);
+
+              for (const result of response.memories) {
+                autoRecalledMemories.push({
+                  id: result.memory.id,
+                  content: result.memory.content.length > 200
+                    ? result.memory.content.substring(0, 200) + '...'
+                    : result.memory.content,
+                  type: result.memory.type,
+                  relevance: Math.round(result.relevance * 100) / 100,
+                  scope: 'project',
+                });
+              }
+
+              // Search global scope
+              try {
+                const globalServices = await initializeGlobalScope();
+                const globalSearchOptions: SearchOptions = {
+                  projectId: GLOBAL_PROJECT_ID,
+                  limit: 3,
+                  minConfidence: 0.3,
+                };
+                const globalResponse = await globalServices.hybridSearch.search(query, globalSearchOptions);
+
+                for (const result of globalResponse.memories) {
+                  autoRecalledMemories.push({
+                    id: result.memory.id,
+                    content: result.memory.content.length > 200
+                      ? result.memory.content.substring(0, 200) + '...'
+                      : result.memory.content,
+                    type: result.memory.type,
+                    relevance: Math.round(result.relevance * 100) / 100,
+                    scope: 'global',
+                  });
+                }
+              } catch {
+                // Global scope search failed, continue with project-only results
+              }
+
+              // Sort by relevance and limit to top 10
+              autoRecalledMemories.sort((a, b) => b.relevance - a.relevance);
+              autoRecalledMemories = autoRecalledMemories.slice(0, 10);
+            }
 
             proactiveContext = {
               graphStats: {
@@ -789,6 +1391,7 @@ function createServer(): Server {
                 phase: c.phase,
                 pendingSteps: c.pendingSteps.length,
               })),
+              autoRecalledMemories,
             };
           }
 
@@ -1290,6 +1893,142 @@ function createServer(): Server {
               };
             }
 
+            // V11: Knowledge graph entity queries
+            case 'get_entities': {
+              if (!knowledgeGraphPopulator) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Knowledge graph populator not initialized' }],
+                  isError: true,
+                };
+              }
+
+              if (!input.memoryId) {
+                return {
+                  content: [{ type: 'text', text: 'Error: memoryId is required for "get_entities" action' }],
+                  isError: true,
+                };
+              }
+
+              const linkedEntities = knowledgeGraphPopulator.getLinkedEntities(input.memoryId, projectId);
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      memoryId: input.memoryId,
+                      entities: linkedEntities.map((e) => ({
+                        entityId: e.entityId,
+                        name: e.entityName,
+                        type: e.entityType,
+                        relationType: e.relationType,
+                      })),
+                      count: linkedEntities.length,
+                      message: linkedEntities.length > 0
+                        ? `Memory is linked to ${linkedEntities.length} entities`
+                        : 'Memory has no entity links',
+                    }),
+                  },
+                ],
+              };
+            }
+
+            case 'find_by_entity': {
+              if (!knowledgeGraphPopulator) {
+                return {
+                  content: [{ type: 'text', text: 'Error: Knowledge graph populator not initialized' }],
+                  isError: true,
+                };
+              }
+
+              const entityNameArg = (args as { entityName?: string }).entityName;
+              const entityTypeArg = (args as { entityType?: string }).entityType;
+
+              if (!entityNameArg) {
+                return {
+                  content: [{ type: 'text', text: 'Error: entityName is required for "find_by_entity" action' }],
+                  isError: true,
+                };
+              }
+
+              // Find the entity first
+              const db = connectionPool.get(projectId);
+              const entityQuery = entityTypeArg
+                ? `SELECT id, name, type FROM entities WHERE project_id = ? AND LOWER(name) LIKE LOWER(?) AND type = ? AND valid_to IS NULL LIMIT 10`
+                : `SELECT id, name, type FROM entities WHERE project_id = ? AND LOWER(name) LIKE LOWER(?) AND valid_to IS NULL LIMIT 10`;
+
+              const entityParams = entityTypeArg
+                ? [projectId, `%${entityNameArg}%`, entityTypeArg]
+                : [projectId, `%${entityNameArg}%`];
+
+              const matchingEntities = db.instance.prepare(entityQuery).all(...entityParams) as Array<{
+                id: string;
+                name: string;
+                type: string;
+              }>;
+
+              if (matchingEntities.length === 0) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({
+                        searchTerm: entityNameArg,
+                        entityType: entityTypeArg ?? 'any',
+                        entities: [],
+                        memories: [],
+                        message: 'No entities found matching the search term',
+                      }),
+                    },
+                  ],
+                };
+              }
+
+              // Get memories linked to these entities
+              const entityIds = matchingEntities.map((e) => e.id);
+              const placeholders = entityIds.map(() => '?').join(',');
+              const memoryRows = db.instance
+                .prepare(
+                  `SELECT DISTINCT m.id, m.content, m.type, mel.entity_id
+                   FROM memory_entity_links mel
+                   JOIN memories m ON mel.memory_id = m.id
+                   WHERE mel.entity_id IN (${placeholders})
+                     AND m.deleted_at IS NULL
+                   ORDER BY m.created_at DESC
+                   LIMIT 20`
+                )
+                .all(...entityIds) as Array<{
+                  id: string;
+                  content: string;
+                  type: string;
+                  entity_id: string;
+                }>;
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      searchTerm: entityNameArg,
+                      entityType: entityTypeArg ?? 'any',
+                      entities: matchingEntities.map((e) => ({
+                        id: e.id,
+                        name: e.name,
+                        type: e.type,
+                      })),
+                      memories: memoryRows.map((m) => ({
+                        id: m.id,
+                        content: m.content.length > 150 ? m.content.substring(0, 150) + '...' : m.content,
+                        type: m.type,
+                        linkedEntity: matchingEntities.find((e) => e.id === m.entity_id)?.name,
+                      })),
+                      message: `Found ${matchingEntities.length} matching entities with ${memoryRows.length} linked memories`,
+                    }),
+                  },
+                ],
+              };
+            }
+
             default:
               return {
                 content: [{ type: 'text', text: `Unknown memory_link action: ${input.action}` }],
@@ -1432,6 +2171,465 @@ function createServer(): Server {
                 isError: true,
               };
           }
+        }
+
+        // V8: Project management tools
+        case 'memory_list_projects': {
+          const allProjectIds = listAllProjects();
+          const projects: Array<{
+            projectId: string;
+            isGlobal: boolean;
+            isCurrent: boolean;
+            dbSizeKB: number;
+            memoryCount: number;
+          }> = [];
+
+          for (const pid of allProjectIds) {
+            try {
+              const db = connectionPool.get(pid);
+              runMigrations(db);
+              const repo = new MemoryRepository(db);
+              const count = repo.getMemoryCount(pid);
+              const metadata = getProjectMetadata(pid);
+
+              projects.push({
+                projectId: pid,
+                isGlobal: pid === GLOBAL_PROJECT_ID,
+                isCurrent: pid === projectId,
+                dbSizeKB: metadata ? Math.round(metadata.sizeBytes / 1024) : 0,
+                memoryCount: count,
+              });
+            } catch {
+              // Skip projects that fail to load
+            }
+          }
+
+          // Sort: current first, then global, then by memory count
+          projects.sort((a, b) => {
+            if (a.isCurrent) return -1;
+            if (b.isCurrent) return 1;
+            if (a.isGlobal) return -1;
+            if (b.isGlobal) return 1;
+            return b.memoryCount - a.memoryCount;
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  currentProjectId: projectId,
+                  projects,
+                  totalProjects: projects.length,
+                  totalMemories: projects.reduce((sum, p) => sum + p.memoryCount, 0),
+                }),
+              },
+            ],
+          };
+        }
+
+        case 'memory_migrate': {
+          const { memoryId, targetScope, action } = args as { memoryId: string; targetScope: string; action: string };
+
+          if (!memoryId || !targetScope || !action) {
+            return {
+              content: [{ type: 'text', text: 'Error: memoryId, targetScope, and action are required' }],
+              isError: true,
+            };
+          }
+
+          // Find the memory in project or global scope
+          let sourceMemory = memoryRepository.findById(memoryId, projectId);
+          let sourceScope = 'project';
+          let sourceRepo = memoryRepository;
+          let sourceEmbedding = embeddingService;
+
+          if (!sourceMemory) {
+            const globalServices = await initializeGlobalScope();
+            sourceMemory = globalServices.memoryRepository.findById(memoryId, GLOBAL_PROJECT_ID);
+            sourceScope = 'global';
+            sourceRepo = globalServices.memoryRepository;
+            sourceEmbedding = globalServices.embeddingService;
+          }
+
+          if (!sourceMemory) {
+            return {
+              content: [{ type: 'text', text: `Memory ${memoryId} not found in project or global scope` }],
+              isError: true,
+            };
+          }
+
+          // Check if already in target scope
+          if (sourceScope === targetScope) {
+            return {
+              content: [{ type: 'text', text: `Memory is already in ${targetScope} scope` }],
+            };
+          }
+
+          // Get target services
+          const targetIsGlobal = targetScope === 'global';
+          const targetRepo = targetIsGlobal ? (await initializeGlobalScope()).memoryRepository : memoryRepository;
+          const targetEmbedding = targetIsGlobal ? (await initializeGlobalScope()).embeddingService : embeddingService;
+          const targetProjectId = targetIsGlobal ? GLOBAL_PROJECT_ID : projectId;
+
+          // Create new embedding for target
+          const newEmbedding = await targetEmbedding.embed(sourceMemory.content);
+
+          // Create memory in target scope - build input with only defined properties
+          const createInput: MemoryCreateInput = {
+            content: sourceMemory.content,
+            type: sourceMemory.type,
+            confidence: sourceMemory.confidence,
+            projectId: targetProjectId,
+          };
+          if (sourceMemory.citation) createInput.citation = sourceMemory.citation;
+          if (sourceMemory.language) createInput.language = sourceMemory.language;
+
+          const newMemory = targetRepo.createMemory(createInput, newEmbedding, targetIsGlobal ? undefined : projectRoot);
+
+          // If move (not copy), delete from source
+          if (action === 'move') {
+            sourceRepo.softDelete(memoryId, sourceScope === 'global' ? GLOBAL_PROJECT_ID : projectId, `Migrated to ${targetScope} scope`);
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  action,
+                  sourceId: memoryId,
+                  sourceScope,
+                  newId: newMemory.id,
+                  targetScope,
+                  message: `Memory ${action === 'move' ? 'moved' : 'copied'} from ${sourceScope} to ${targetScope}`,
+                }),
+              },
+            ],
+          };
+        }
+
+        // V9: Auto-extraction
+        case 'memory_auto_extract': {
+          const { content, context, source, autoStore, minConfidence } = args as {
+            content: string;
+            context?: string;
+            source: string;
+            autoStore?: boolean;
+            minConfidence?: number;
+          };
+
+          if (!content || !source) {
+            return {
+              content: [{ type: 'text', text: 'Error: content and source are required' }],
+              isError: true,
+            };
+          }
+
+          // Extract memory candidates
+          const result = extractMemories(content, source, context);
+          const threshold = minConfidence ?? 0.7;
+          const shouldAutoStore = autoStore ?? false;
+
+          const stored: Array<{ id: string; type: string; confidence: number }> = [];
+          const candidates: Array<{ content: string; type: string; confidence: number; reason: string }> = [];
+
+          for (const candidate of result.candidates) {
+            if (shouldAutoStore && candidate.confidence >= threshold) {
+              // Auto-store this memory
+              const citation = detectCitation(candidate.content);
+              const embedding = await embeddingService.embed(candidate.content);
+
+              const createInput: MemoryCreateInput = {
+                content: candidate.content,
+                type: candidate.type,
+                confidence: candidate.confidence,
+                projectId,
+              };
+              if (citation) createInput.citation = citation;
+
+              const memory = memoryRepository.createMemory(createInput, embedding, projectRoot);
+
+              // Auto-link
+              if (autoLinker && embedding && !HARDENING_DISABLED) {
+                await autoLinker.processNewMemory(memory.id, memory.content, embedding, projectId);
+              }
+
+              stored.push({
+                id: memory.id,
+                type: memory.type,
+                confidence: memory.confidence,
+              });
+            } else {
+              // Return as candidate for review
+              candidates.push({
+                content: candidate.content,
+                type: candidate.type,
+                confidence: candidate.confidence,
+                reason: candidate.reason,
+              });
+            }
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  stored,
+                  candidates,
+                  stats: result.stats,
+                  message: stored.length > 0
+                    ? `Auto-stored ${stored.length} memories. ${candidates.length} candidates below threshold.`
+                    : `Found ${candidates.length} candidates. Use autoStore: true to store automatically.`,
+                }),
+              },
+            ],
+          };
+        }
+
+        // V9: Proactive context assembly
+        case 'memory_context_assemble': {
+          const { task, files, includeGlobal, maxMemories } = args as {
+            task: string;
+            files?: string[];
+            includeGlobal?: boolean;
+            maxMemories?: number;
+          };
+
+          if (!task) {
+            return {
+              content: [{ type: 'text', text: 'Error: task is required' }],
+              isError: true,
+            };
+          }
+
+          const limit = maxMemories ?? 10;
+          const searchGlobal = includeGlobal ?? true;
+
+          // Build search query from task and files
+          let query = task;
+          if (files && files.length > 0) {
+            // Extract file names for targeted recall
+            const fileNames = files.map(f => f.split('/').pop()).join(' ');
+            query = `${task} ${fileNames}`;
+          }
+
+          // Collect memories from both scopes
+          type ContextMemory = {
+            id: string;
+            content: string;
+            type: string;
+            confidence: number;
+            relevance: number;
+            scope: string;
+          };
+          const memories: ContextMemory[] = [];
+          let contradictions: Array<{ memory1: string; memory2: string }> = [];
+
+          // Search project scope
+          const searchOptions: SearchOptions = {
+            projectId,
+            limit: limit,
+            minConfidence: 0.3,
+          };
+          const response = await hybridSearch.search(query, searchOptions);
+
+          for (const result of response.memories) {
+            memories.push({
+              id: result.memory.id,
+              content: result.memory.content,
+              type: result.memory.type,
+              confidence: result.memory.confidence,
+              relevance: Math.round(result.relevance * 100) / 100,
+              scope: 'project',
+            });
+          }
+
+          // Search global scope
+          if (searchGlobal) {
+            try {
+              const globalServices = await initializeGlobalScope();
+              const globalSearchOptions: SearchOptions = {
+                projectId: GLOBAL_PROJECT_ID,
+                limit: Math.ceil(limit / 3),
+                minConfidence: 0.3,
+              };
+              const globalResponse = await globalServices.hybridSearch.search(query, globalSearchOptions);
+
+              for (const result of globalResponse.memories) {
+                memories.push({
+                  id: result.memory.id,
+                  content: result.memory.content,
+                  type: result.memory.type,
+                  confidence: result.memory.confidence,
+                  relevance: Math.round(result.relevance * 100) / 100,
+                  scope: 'global',
+                });
+              }
+            } catch {
+              // Global scope not available
+            }
+          }
+
+          // Sort by relevance and limit
+          memories.sort((a, b) => b.relevance - a.relevance);
+          const topMemories = memories.slice(0, limit);
+
+          // Check for contradictions among top memories
+          if (memoryGraphService && topMemories.length > 1) {
+            const allContradictions = memoryGraphService.findContradictions(projectId);
+            const topIds = new Set(topMemories.map(m => m.id));
+
+            for (const c of allContradictions) {
+              if (topIds.has(c.source.id) || topIds.has(c.target.id)) {
+                contradictions.push({
+                  memory1: c.source.content.substring(0, 100) + '...',
+                  memory2: c.target.content.substring(0, 100) + '...',
+                });
+              }
+            }
+          }
+
+          // Group memories by type for structured output
+          const byType: Record<string, ContextMemory[]> = {};
+          for (const m of topMemories) {
+            const typeKey = m.type;
+            if (!byType[typeKey]) {
+              byType[typeKey] = [];
+            }
+            byType[typeKey]!.push(m);
+          }
+
+          // Build formatted context string
+          let contextText = `## Relevant Memory Context for: "${task}"\n\n`;
+
+          if (byType['decision'] && byType['decision'].length > 0) {
+            contextText += '### Past Decisions\n';
+            for (const m of byType['decision']) {
+              contextText += `- ${m.content}\n`;
+            }
+            contextText += '\n';
+          }
+
+          if (byType['pattern'] && byType['pattern'].length > 0) {
+            contextText += '### Patterns & Approaches\n';
+            for (const m of byType['pattern']) {
+              contextText += `- ${m.content}\n`;
+            }
+            contextText += '\n';
+          }
+
+          if (byType['error'] && byType['error'].length > 0) {
+            contextText += '### Past Errors & Solutions\n';
+            for (const m of byType['error']) {
+              contextText += `- ${m.content}\n`;
+            }
+            contextText += '\n';
+          }
+
+          if (byType['preference'] && byType['preference'].length > 0) {
+            contextText += '### Preferences & Conventions\n';
+            for (const m of byType['preference']) {
+              contextText += `- ${m.content}\n`;
+            }
+            contextText += '\n';
+          }
+
+          if (byType['fact'] && byType['fact'].length > 0) {
+            contextText += '### Relevant Facts\n';
+            for (const m of byType['fact']) {
+              contextText += `- ${m.content}\n`;
+            }
+            contextText += '\n';
+          }
+
+          if (contradictions.length > 0) {
+            contextText += '### ⚠️ Potential Contradictions\n';
+            for (const c of contradictions) {
+              contextText += `- "${c.memory1}" vs "${c.memory2}"\n`;
+            }
+            contextText += '\n';
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  context: contextText,
+                  memories: topMemories,
+                  contradictions,
+                  stats: {
+                    totalRecalled: topMemories.length,
+                    byType: Object.fromEntries(
+                      Object.entries(byType).map(([k, v]) => [k, v.length])
+                    ),
+                    contradictionCount: contradictions.length,
+                  },
+                  message: topMemories.length > 0
+                    ? `Assembled context from ${topMemories.length} memories.${contradictions.length > 0 ? ` Warning: ${contradictions.length} potential contradiction(s).` : ''}`
+                    : 'No relevant memories found for this task.',
+                }),
+              },
+            ],
+          };
+        }
+
+        // V10: Memory consolidation
+        case 'memory_consolidate': {
+          const { duplicateThreshold, decayAfterDays, decayRate, dryRun } = args as {
+            duplicateThreshold?: number;
+            decayAfterDays?: number;
+            decayRate?: number;
+            dryRun?: boolean;
+          };
+
+          const db = connectionPool.get(projectId);
+          const consolidationService = new ConsolidationService(db.instance);
+
+          // Build options conditionally to satisfy exactOptionalPropertyTypes
+          const consolidationOptions: ConsolidationOptions = {
+            dryRun: dryRun ?? false,
+          };
+          if (duplicateThreshold !== undefined) consolidationOptions.duplicateThreshold = duplicateThreshold;
+          if (decayAfterDays !== undefined) consolidationOptions.decayAfterDays = decayAfterDays;
+          if (decayRate !== undefined) consolidationOptions.decayRate = decayRate;
+
+          const result = await consolidationService.consolidate(projectId, consolidationOptions);
+
+          // Build summary message
+          const parts: string[] = [];
+          if (result.merged.length > 0) {
+            parts.push(`Merged ${result.merged.length} duplicate groups`);
+          }
+          if (result.decayed.length > 0) {
+            parts.push(`Decayed ${result.decayed.length} memories`);
+          }
+          if (result.flaggedForReview.length > 0) {
+            parts.push(`Flagged ${result.flaggedForReview.length} for review`);
+          }
+          if (result.clusters.length > 0) {
+            parts.push(`Found ${result.clusters.length} clusters to potentially summarize`);
+          }
+
+          const message = dryRun
+            ? `[DRY RUN] Would: ${parts.join(', ') || 'no changes needed'}`
+            : parts.length > 0
+              ? parts.join(', ')
+              : 'No consolidation needed - memory is healthy';
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  ...result,
+                  message,
+                }),
+              },
+            ],
+          };
         }
 
         default:

@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/hooks-settings.json",
-  "description": "Claude Memory plugin hook configurations - V4 with automation",
+  "description": "Claude Memory plugin hook configurations - V9 with auto-extraction and proactive context",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,6 +8,13 @@
         "matcher": "SessionStart",
         "command": "./hooks/session-restore.sh",
         "timeout": 5000
+      },
+      {
+        "description": "Prompt for context assembly before major file operations",
+        "matcher": "Write|Edit",
+        "command": "./hooks/context-assemble.sh",
+        "timeout": 1000,
+        "onError": "continue"
       }
     ],
     "PostToolUse": [

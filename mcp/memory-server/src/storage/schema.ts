@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 7;
+export const CURRENT_VERSION = 8;
 
 /**
  * Initial schema - Version 1
@@ -304,6 +304,46 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
       DROP TABLE IF EXISTS memory_links;
       -- Note: SQLite doesn't support DROP COLUMN directly
       -- Columns remain but are unused after rollback
+    `,
+  },
+  // V8: Memory-Entity Links for Knowledge Graph Population
+  {
+    version: 8,
+    up: `
+      -- Create new memory_entity_links table with relation_type
+      CREATE TABLE IF NOT EXISTS memory_entity_links (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL REFERENCES memories(id),
+        entity_id TEXT NOT NULL REFERENCES entities(id),
+        relation_type TEXT NOT NULL CHECK (
+          relation_type IN ('implements', 'depends_on', 'satisfies', 'calls', 'contradicts', 'supersedes')
+        ),
+        project_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(memory_id, entity_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_mel_memory ON memory_entity_links(memory_id);
+      CREATE INDEX IF NOT EXISTS idx_mel_entity ON memory_entity_links(entity_id);
+      CREATE INDEX IF NOT EXISTS idx_mel_project ON memory_entity_links(project_id);
+
+      -- Migrate existing data from memory_entities if any
+      INSERT OR IGNORE INTO memory_entity_links (id, memory_id, entity_id, relation_type, project_id, created_at)
+      SELECT
+        lower(hex(randomblob(16))),
+        me.memory_id,
+        me.entity_id,
+        'depends_on',
+        m.project_id,
+        strftime('%s', 'now')
+      FROM memory_entities me
+      JOIN memories m ON me.memory_id = m.id;
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_mel_project;
+      DROP INDEX IF EXISTS idx_mel_entity;
+      DROP INDEX IF EXISTS idx_mel_memory;
+      DROP TABLE IF EXISTS memory_entity_links;
     `,
   },
 ];

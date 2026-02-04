@@ -1,40 +1,77 @@
 #!/bin/bash
-# Memory Extract Hook
-# Suggests extracting memories from significant interactions
+# Memory Extract Hook (V9)
+# Provides intelligent prompts for memory extraction after significant operations
 
 TOOL_NAME="${1:-}"
 TOOL_RESULT="${2:-}"
 
-# Check if this was a significant operation
-is_significant=false
+# Analyze result for extraction opportunities
+analyze_result() {
+  local result="$1"
+  local opportunities=""
 
-# Significant tool operations that often produce learnings
+  # Check for error patterns that were fixed
+  if echo "$result" | grep -qiE "(error|failed).*(fixed|resolved|solved)"; then
+    opportunities="${opportunities}ERROR_FIX "
+  fi
+
+  # Check for decision language
+  if echo "$result" | grep -qiE "(decided|chose|using|approach|instead of|because)"; then
+    opportunities="${opportunities}DECISION "
+  fi
+
+  # Check for pattern discovery
+  if echo "$result" | grep -qiE "(pattern|always|best practice|technique|learned)"; then
+    opportunities="${opportunities}PATTERN "
+  fi
+
+  # Check for preference expressions
+  if echo "$result" | grep -qiE "(prefer|style|convention|standard|never|always use)"; then
+    opportunities="${opportunities}PREFERENCE "
+  fi
+
+  echo "$opportunities"
+}
+
+# Check if this was a significant operation
 case "$TOOL_NAME" in
   "Write"|"Edit")
-    # Code changes often involve decisions worth remembering
-    is_significant=true
+    opportunities=$(analyze_result "$TOOL_RESULT")
+    if [ -n "$opportunities" ]; then
+      cat << EOF
+<memory-extract-opportunity>
+Detected potential memories in code changes: ${opportunities}
+
+You can use memory_auto_extract() to analyze and store automatically:
+  memory_auto_extract({
+    content: "<your response text>",
+    source: "code_change",
+    autoStore: true
+  })
+
+Or call memory_store() manually for specific learnings.
+</memory-extract-opportunity>
+EOF
+    fi
     ;;
+
   "Bash")
     # Check for error patterns that should be remembered
-    if echo "$TOOL_RESULT" | grep -qiE "(error|failed|fixed|solution|resolved)"; then
-      is_significant=true
+    if echo "$TOOL_RESULT" | grep -qiE "(error|failed|exception)"; then
+      if echo "$TOOL_RESULT" | grep -qiE "(fixed|resolved|solved|solution|workaround)"; then
+        cat << EOF
+<memory-extract-opportunity>
+Detected ERROR + FIX pattern in command output.
+
+Consider storing this error resolution:
+  memory_auto_extract({
+    content: "<error description and fix>",
+    source: "error",
+    autoStore: true
+  })
+</memory-extract-opportunity>
+EOF
+      fi
     fi
     ;;
 esac
-
-if [ "$is_significant" = true ]; then
-  cat << EOF
-<memory-extract-suggestion>
-This interaction may contain valuable information to remember:
-
-Consider using memory_store() if you:
-- Made a significant decision (type: "decision")
-- Discovered a pattern or approach (type: "pattern")
-- Solved an error or bug (type: "error")
-- Learned a user preference (type: "preference")
-- Documented a fact about the codebase (type: "fact")
-
-Memory will be auto-linked to related memories (V4 feature).
-</memory-extract-suggestion>
-EOF
-fi

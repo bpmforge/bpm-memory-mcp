@@ -1,10 +1,53 @@
 import Database from 'better-sqlite3';
 import { createHash } from 'crypto';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 
 const MEMORY_DIR = join(homedir(), '.claude-memory');
+
+/**
+ * List all project IDs that have memory databases
+ */
+export function listAllProjects(): string[] {
+  if (!existsSync(MEMORY_DIR)) {
+    return [];
+  }
+
+  const entries = readdirSync(MEMORY_DIR, { withFileTypes: true });
+  const projectIds: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const dbPath = join(MEMORY_DIR, entry.name, 'memory.db');
+      if (existsSync(dbPath)) {
+        projectIds.push(entry.name);
+      }
+    }
+  }
+
+  return projectIds;
+}
+
+/**
+ * Get project metadata (for display purposes)
+ */
+export function getProjectMetadata(projectId: string): { dbPath: string; sizeBytes: number } | null {
+  const dbPath = getDatabasePath(projectId);
+  if (!existsSync(dbPath)) {
+    return null;
+  }
+
+  try {
+    const stats = statSync(dbPath);
+    return { dbPath, sizeBytes: stats.size };
+  } catch {
+    return null;
+  }
+}
+
+// Global project ID for cross-project memories
+export const GLOBAL_PROJECT_ID = '_global';
 
 /**
  * Get project ID from git root path
@@ -12,6 +55,13 @@ const MEMORY_DIR = join(homedir(), '.claude-memory');
  */
 export function getProjectId(gitRoot: string): string {
   return createHash('sha256').update(gitRoot).digest('hex').substring(0, 16);
+}
+
+/**
+ * Check if a project ID is the global scope
+ */
+export function isGlobalScope(projectId: string): boolean {
+  return projectId === GLOBAL_PROJECT_ID;
 }
 
 /**

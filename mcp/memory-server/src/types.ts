@@ -54,6 +54,12 @@ export enum FeedbackType {
   DUPLICATE = 'duplicate',
 }
 
+// Memory scope for global vs project-specific memories
+export enum MemoryScope {
+  PROJECT = 'project',
+  GLOBAL = 'global',
+}
+
 export enum SymbolType {
   FUNCTION = 'function',
   CLASS = 'class',
@@ -368,6 +374,7 @@ export const FeedbackTypeSchema = z.nativeEnum(FeedbackType);
 export const SymbolTypeSchema = z.nativeEnum(SymbolType);
 export const MemoryLinkTypeSchema = z.nativeEnum(MemoryLinkType);
 export const GoalStatusSchema = z.nativeEnum(GoalStatus);
+export const MemoryScopeSchema = z.nativeEnum(MemoryScope);
 
 export const LanguageSchema = z.enum([
   'typescript', 'javascript', 'python', 'rust', 'go', 'java',
@@ -392,6 +399,8 @@ export const MemoryStoreInputSchema = z.object({
   // V2 fields
   language: LanguageSchema.optional(),
   codeContext: CodeContextSchema.optional(),
+  // V6: Global memory support
+  scope: MemoryScopeSchema.optional().default(MemoryScope.PROJECT),
 });
 
 export const MemoryRecallInputSchema = z.object({
@@ -403,6 +412,9 @@ export const MemoryRecallInputSchema = z.object({
   language: LanguageSchema.optional(),
   includeStale: z.boolean().optional().default(false),
   includeSuperseded: z.boolean().optional().default(false),
+  // V6: Global memory support - 'both' searches global + project (default)
+  // V8: 'all' searches ALL projects (cross-project search)
+  scope: z.enum(['project', 'global', 'both', 'all']).optional().default('both'),
 });
 
 export const MemoryForgetInputSchema = z.object({
@@ -449,18 +461,23 @@ export const MemoryLinkInputSchema = z.object({
   action: z.enum([
     'create', 'find_related', 'get_links',
     // V5: Graph query actions
-    'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans'
+    'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans',
+    // V11: Knowledge graph entity queries
+    'get_entities', 'find_by_entity'
   ]),
   sourceId: z.string().uuid().optional(),
   targetId: z.string().uuid().optional(),
   linkType: MemoryLinkTypeSchema.optional(),
   strength: z.number().min(0).max(1).optional().default(1.0),
   bidirectional: z.boolean().optional().default(false),
-  memoryId: z.string().uuid().optional(), // For find_related, get_links, find_chain, find_cluster
+  memoryId: z.string().uuid().optional(), // For find_related, get_links, find_chain, find_cluster, get_entities
   depth: z.number().int().min(1).max(3).optional().default(2),
   // V5: Chain traversal options
   linkTypes: z.array(z.string()).optional(), // Link types to follow for find_chain
   direction: z.enum(['forward', 'backward', 'both']).optional(), // Chain direction
+  // V11: Entity query options
+  entityName: z.string().optional(), // For find_by_entity
+  entityType: z.enum(['file', 'function', 'type', 'decision', 'error']).optional(), // For find_by_entity
 });
 
 export const CheckpointTaskInputSchema = z.object({
