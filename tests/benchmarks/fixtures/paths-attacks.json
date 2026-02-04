@@ -1,0 +1,90 @@
+{
+  "description": "50+ path traversal attack vectors that SHOULD be blocked",
+  "testCases": [
+    {
+      "category": "basic_traversal",
+      "samples": [
+        { "path": "../../../etc/passwd", "description": "Unix password file" },
+        { "path": "..\\..\\..\\windows\\system32\\config\\sam", "description": "Windows SAM file" },
+        { "path": "../../../etc/shadow", "description": "Unix shadow file" },
+        { "path": "../../.ssh/id_rsa", "description": "SSH private key" },
+        { "path": "../../../root/.bashrc", "description": "Root bashrc" },
+        { "path": "..\\..\\..\\boot.ini", "description": "Windows boot.ini" },
+        { "path": "../../../var/log/auth.log", "description": "Auth log file" },
+        { "path": "../../../etc/hosts", "description": "Hosts file" },
+        { "path": "..\\..\\..\\windows\\win.ini", "description": "Windows ini file" },
+        { "path": "../../../home/user/.bash_history", "description": "Bash history" }
+      ]
+    },
+    {
+      "category": "url_encoding",
+      "samples": [
+        { "path": "..%2f..%2f..%2fetc/passwd", "description": "Single URL encoded slashes" },
+        { "path": "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd", "description": "Fully URL encoded" },
+        { "path": "..%252f..%252f..%252fetc/passwd", "description": "Double URL encoded" },
+        { "path": "%252e%252e%252f%252e%252e%252fetc/passwd", "description": "Double encoded dots and slashes" },
+        { "path": "..%c0%af..%c0%af..%c0%afetc/passwd", "description": "Overlong UTF-8 slash" },
+        { "path": "..%ef%bc%8f..%ef%bc%8fetc/passwd", "description": "Fullwidth solidus" },
+        { "path": "..%5c..%5c..%5cwindows%5csystem32", "description": "URL encoded backslash" },
+        { "path": "%2e%2e/%2e%2e/%2e%2e/etc/passwd", "description": "Encoded dots only" },
+        { "path": "..%00/..%00/..%00/etc/passwd", "description": "Null bytes in path" },
+        { "path": "..%0d%0a/etc/passwd", "description": "CRLF injection" }
+      ]
+    },
+    {
+      "category": "unicode_tricks",
+      "samples": [
+        { "path": "..／..／..／etc/passwd", "description": "Fullwidth solidus U+FF0F" },
+        { "path": "。。/。。/。。/etc/passwd", "description": "Ideographic full stop" },
+        { "path": "‥/‥/‥/etc/passwd", "description": "Two dot leader U+2025" },
+        { "path": "．．/．．/．．/etc/passwd", "description": "Fullwidth dots" },
+        { "path": "..⁄..⁄..⁄etc/passwd", "description": "Fraction slash U+2044" },
+        { "path": "..∕..∕..∕etc/passwd", "description": "Division slash U+2215" },
+        { "path": "..⧸..⧸..⧸etc/passwd", "description": "Big solidus U+29F8" },
+        { "path": "..＼..＼..＼windows", "description": "Fullwidth backslash" },
+        { "path": "..╱..╱..╱etc/passwd", "description": "Box drawing slash" },
+        { "path": ".．/.．/.．/etc/passwd", "description": "Mixed dot width" }
+      ]
+    },
+    {
+      "category": "null_byte_injection",
+      "samples": [
+        { "path": "../../../etc/passwd%00.txt", "description": "Null byte extension bypass" },
+        { "path": "../../../etc/passwd\u0000.png", "description": "Unicode null in path" },
+        { "path": "../../../etc/passwd%00%00", "description": "Multiple null bytes" },
+        { "path": "../../../etc/passwd\0.jpg", "description": "Raw null character" },
+        { "path": "..%00/../..%00/../etc/passwd", "description": "Null in traversal" }
+      ]
+    },
+    {
+      "category": "mixed_slashes",
+      "samples": [
+        { "path": "..\\/../..\\/../etc/passwd", "description": "Mixed forward/back slashes" },
+        { "path": "../..\\../..\\etc/passwd", "description": "Alternating slashes" },
+        { "path": "....//....//etc/passwd", "description": "Double dot double slash" },
+        { "path": "..././..././etc/passwd", "description": "Dot slash combinations" },
+        { "path": "..\\//..\\//..\\/etc/passwd", "description": "Escaped mixed slashes" },
+        { "path": "....\\\\....\\\\etc\\passwd", "description": "Double backslash" },
+        { "path": "..//..//..//etc/passwd", "description": "Double forward slashes" },
+        { "path": "../\\../\\../\\etc/passwd", "description": "Backslash forward pattern" },
+        { "path": "..%5c%2f..%5c%2fetc/passwd", "description": "Encoded mixed slashes" },
+        { "path": "....\\/....\\/etc/passwd", "description": "Four dots pattern" }
+      ]
+    },
+    {
+      "category": "absolute_paths",
+      "samples": [
+        { "path": "/etc/passwd", "description": "Unix absolute path" },
+        { "path": "C:\\Windows\\System32\\config\\SAM", "description": "Windows absolute path" },
+        { "path": "/root/.ssh/id_rsa", "description": "Root SSH key" },
+        { "path": "C:/Windows/System32", "description": "Windows with forward slashes" },
+        { "path": "//server/share/file.txt", "description": "UNC path" },
+        { "path": "\\\\server\\share\\file.txt", "description": "UNC with backslashes" },
+        { "path": "file:///etc/passwd", "description": "File protocol" },
+        { "path": "/proc/self/environ", "description": "Linux proc environ" },
+        { "path": "/dev/stdin", "description": "Device file" },
+        { "path": "D:\\Sensitive\\data.db", "description": "Alternative drive" }
+      ]
+    }
+  ]
+}

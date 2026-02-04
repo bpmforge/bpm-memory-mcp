@@ -1,0 +1,80 @@
+{
+  "description": "50+ valid paths that SHOULD be accepted",
+  "testCases": [
+    {
+      "category": "relative_paths",
+      "samples": [
+        { "path": "src/index.ts", "description": "Basic TypeScript file" },
+        { "path": "lib/utils.js", "description": "JavaScript utility file" },
+        { "path": "./src/components/Button.tsx", "description": "Dot-prefix relative path" },
+        { "path": "tests/unit/test.spec.ts", "description": "Test file path" },
+        { "path": "package.json", "description": "Root level file" },
+        { "path": "README.md", "description": "Documentation file" },
+        { "path": ".gitignore", "description": "Dotfile" },
+        { "path": ".env.example", "description": "Example env file" },
+        { "path": "src/index.ts", "description": "Source entry" },
+        { "path": "config/settings.json", "description": "Config file" }
+      ]
+    },
+    {
+      "category": "deep_nesting",
+      "samples": [
+        { "path": "src/components/ui/buttons/primary.tsx", "description": "4 levels deep" },
+        { "path": "packages/core/src/lib/utils/helpers/index.ts", "description": "6 levels deep" },
+        { "path": "apps/web/src/features/auth/components/LoginForm.tsx", "description": "7 levels deep" },
+        { "path": "src/modules/user/services/auth/providers/oauth/google.ts", "description": "8 levels deep" },
+        { "path": "tests/integration/api/v2/endpoints/users/create.test.ts", "description": "8 levels test" },
+        { "path": "packages/shared/components/forms/inputs/text/TextField.tsx", "description": "Monorepo component" },
+        { "path": "src/app/dashboard/settings/profile/avatar/upload.ts", "description": "App route nesting" },
+        { "path": "lib/database/migrations/2024/01/create_users.sql", "description": "Date-based nesting" },
+        { "path": "docs/api/v3/endpoints/authentication/oauth2/flows.md", "description": "API docs nesting" },
+        { "path": "resources/lang/en/validation/messages/custom.php", "description": "Laravel-style nesting" }
+      ]
+    },
+    {
+      "category": "special_characters",
+      "samples": [
+        { "path": "src/[id]/page.tsx", "description": "Next.js dynamic route" },
+        { "path": "src/[[...slug]]/page.tsx", "description": "Next.js catch-all" },
+        { "path": "src/@types/index.d.ts", "description": "At-sign directory" },
+        { "path": "src/$lib/utils.ts", "description": "SvelteKit lib alias" },
+        { "path": "src/_components/Layout.tsx", "description": "Underscore prefix" },
+        { "path": "src/components/Button.spec.tsx", "description": "Dot in filename" },
+        { "path": "src/api/[...path].ts", "description": "Spread syntax in name" },
+        { "path": "src/(auth)/login/page.tsx", "description": "Next.js route group" },
+        { "path": "src/routes/(marketing)/+page.svelte", "description": "SvelteKit plus sign" },
+        { "path": "tests/__mocks__/api.ts", "description": "Jest mocks directory" }
+      ]
+    },
+    {
+      "category": "spaces_and_special",
+      "samples": [
+        { "path": "src/My Component/index.tsx", "description": "Space in directory" },
+        { "path": "docs/Getting Started.md", "description": "Space in filename" },
+        { "path": "assets/images/hero-image (1).png", "description": "Parentheses" },
+        { "path": "src/components/Button - Primary.tsx", "description": "Dashes and spaces" },
+        { "path": "resources/i18n/en-US/common.json", "description": "Locale with hyphen" },
+        { "path": "docs/API Reference (v2).md", "description": "Complex name" },
+        { "path": "src/utils/string_helpers.ts", "description": "Underscores" },
+        { "path": "tests/fixtures/test-data-2024.json", "description": "Hyphens and numbers" },
+        { "path": "src/components/UI.Button.tsx", "description": "Multiple dots" },
+        { "path": "public/assets/logo@2x.png", "description": "At sign in filename" }
+      ]
+    },
+    {
+      "category": "normalized_traversal",
+      "samples": [
+        { "path": "src/../src/index.ts", "description": "Normalized to src/index.ts" },
+        { "path": "./src/./utils/./index.ts", "description": "Multiple dot segments" },
+        { "path": "src/components/../utils/helpers.ts", "description": "Mid-path traversal" },
+        { "path": "tests/../src/index.ts", "description": "Sibling traversal" },
+        { "path": "src/utils/../../src/utils/index.ts", "description": "Double back and forth" },
+        { "path": "./././src/index.ts", "description": "Multiple dot prefixes" },
+        { "path": "packages/core/../core/src/index.ts", "description": "Monorepo normalized" },
+        { "path": "src/components/Button/./index.tsx", "description": "Trailing dot segment" },
+        { "path": "lib/../lib/../lib/utils.ts", "description": "Repeated traversal" },
+        { "path": "src/a/../b/../c/index.ts", "description": "Multiple sibling jumps" }
+      ]
+    }
+  ]
+}
