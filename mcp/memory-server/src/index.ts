@@ -45,6 +45,7 @@ import { AutoLinker } from './linking/index.js';
 import { extractMemories, detectCitation } from './extraction/index.js';
 import { ConsolidationService, type ConsolidationOptions } from './consolidation/index.js';
 import { MemoryGraphService, KnowledgeGraphPopulator, type PopulationResult } from './graph/index.js';
+import { estimateTokens, truncateToTokenBudget, fitItemsToTokenBudget, TOKEN_BUDGETS } from './utils/index.js';
 
 // Storage quota: maximum memories per project
 const MAX_MEMORIES_PER_PROJECT = 10000;
@@ -523,6 +524,12 @@ function createServer(): Server {
               maximum: 20,
               description: 'Maximum memories to include (default: 10)',
             },
+            tokenBudget: {
+              type: 'integer',
+              minimum: 100,
+              maximum: 10000,
+              description: 'Maximum tokens for assembled context. Memories will be truncated to fit. Presets: 500 (minimal), 2000 (standard), 4000 (detailed), 8000 (maximum)',
+            },
           },
           required: ['task'],
         },
@@ -555,6 +562,30 @@ function createServer(): Server {
             dryRun: {
               type: 'boolean',
               description: 'If true, report what would happen without making changes (default: false)',
+            },
+          },
+        },
+      },
+      // V12: Re-embedding tool
+      {
+        name: 'memory_reembed',
+        description: 'Re-generate embeddings for all memories using the current embedding model. Use when changing embedding models or to fix corrupted embeddings.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            batchSize: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 50,
+              description: 'Number of memories to process at once (default: 10)',
+            },
+            dryRun: {
+              type: 'boolean',
+              description: 'If true, report what would happen without making changes (default: false)',
+            },
+            onlyMissing: {
+              type: 'boolean',
+              description: 'If true, only re-embed memories without embeddings (default: false)',
             },
           },
         },
@@ -2388,13 +2419,14 @@ function createServer(): Server {
           };
         }
 
-        // V9: Proactive context assembly
+        // V9: Proactive context assembly (V12: with token budget support)
         case 'memory_context_assemble': {
-          const { task, files, includeGlobal, maxMemories } = args as {
+          const { task, files, includeGlobal, maxMemories, tokenBudget } = args as {
             task: string;
             files?: string[];
             includeGlobal?: boolean;
             maxMemories?: number;
+            tokenBudget?: number;
           };
 
           if (!task) {
@@ -2406,6 +2438,7 @@ function createServer(): Server {
 
           const limit = maxMemories ?? 10;
           const searchGlobal = includeGlobal ?? true;
+          const budget = tokenBudget ?? TOKEN_BUDGETS.standard; // Default 2000 tokens
 
           // Build search query from task and files
           let query = task;
@@ -2474,7 +2507,21 @@ function createServer(): Server {
 
           // Sort by relevance and limit
           memories.sort((a, b) => b.relevance - a.relevance);
-          const topMemories = memories.slice(0, limit);
+          const preTokenMemories = memories.slice(0, limit);
+
+          // V12: Apply token budget - fit memories within budget
+          const { items: topMemories, truncatedContents, totalTokens, itemsIncluded } = fitItemsToTokenBudget(
+            preTokenMemories,
+            budget,
+            {
+              headerTokens: 100, // Reserve for section headers
+              itemOverhead: 10, // Bullets, newlines per item
+              minItemTokens: 30, // Minimum useful memory size
+            }
+          );
+
+          // Track truncation stats
+          const truncatedCount = truncatedContents.size;
 
           // Check for contradictions among top memories
           if (memoryGraphService && topMemories.length > 1) {
@@ -2552,6 +2599,9 @@ function createServer(): Server {
             contextText += '\n';
           }
 
+          // Calculate actual token usage of context text
+          const contextTokens = estimateTokens(contextText);
+
           return {
             content: [
               {
@@ -2566,9 +2616,14 @@ function createServer(): Server {
                       Object.entries(byType).map(([k, v]) => [k, v.length])
                     ),
                     contradictionCount: contradictions.length,
+                    // V12: Token budget stats
+                    tokenBudget: budget,
+                    estimatedTokens: contextTokens,
+                    memoriesTruncated: truncatedCount,
+                    memoriesExcluded: preTokenMemories.length - itemsIncluded,
                   },
                   message: topMemories.length > 0
-                    ? `Assembled context from ${topMemories.length} memories.${contradictions.length > 0 ? ` Warning: ${contradictions.length} potential contradiction(s).` : ''}`
+                    ? `Assembled context from ${topMemories.length} memories (~${contextTokens} tokens).${truncatedCount > 0 ? ` ${truncatedCount} truncated to fit budget.` : ''}${contradictions.length > 0 ? ` Warning: ${contradictions.length} potential contradiction(s).` : ''}`
                     : 'No relevant memories found for this task.',
                 }),
               },
@@ -2626,6 +2681,119 @@ function createServer(): Server {
                 text: JSON.stringify({
                   ...result,
                   message,
+                }),
+              },
+            ],
+          };
+        }
+
+        // V12: Re-embedding tool
+        case 'memory_reembed': {
+          const { batchSize, dryRun, onlyMissing } = args as {
+            batchSize?: number;
+            dryRun?: boolean;
+            onlyMissing?: boolean;
+          };
+
+          const batch = batchSize ?? 10;
+          const isDryRun = dryRun ?? false;
+          const missingOnly = onlyMissing ?? false;
+
+          const db = connectionPool.get(projectId);
+
+          // Get current model info
+          const currentModel = embeddingService.currentModel ?? 'unknown';
+
+          // Get memories to re-embed
+          let query = `
+            SELECT id, content, embedding, embedding_model
+            FROM memories
+            WHERE project_id = ? AND deleted_at IS NULL AND superseded_by IS NULL
+          `;
+          if (missingOnly) {
+            query += ' AND embedding IS NULL';
+          }
+          query += ' ORDER BY created_at DESC';
+
+          const memories = db.instance.prepare(query).all(projectId) as Array<{
+            id: string;
+            content: string;
+            embedding: Buffer | null;
+            embedding_model: string | null;
+          }>;
+
+          if (memories.length === 0) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    message: missingOnly
+                      ? 'No memories without embeddings found'
+                      : 'No memories found to re-embed',
+                    totalMemories: 0,
+                  }),
+                },
+              ],
+            };
+          }
+
+          if (isDryRun) {
+            const needsUpdate = memories.filter(
+              m => !m.embedding || m.embedding_model !== currentModel
+            );
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    message: `[DRY RUN] Would re-embed ${needsUpdate.length} of ${memories.length} memories`,
+                    totalMemories: memories.length,
+                    needsUpdate: needsUpdate.length,
+                    currentModel,
+                    dryRun: true,
+                  }),
+                },
+              ],
+            };
+          }
+
+          // Re-embed in batches
+          let updated = 0;
+          let errors = 0;
+          const updateStmt = db.instance.prepare(
+            'UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?'
+          );
+
+          for (let i = 0; i < memories.length; i += batch) {
+            const memoryBatch = memories.slice(i, i + batch);
+
+            for (const memory of memoryBatch) {
+              try {
+                const embedding = await embeddingService.embed(memory.content);
+                if (embedding) {
+                  const buffer = Buffer.from(embedding.buffer);
+                  updateStmt.run(buffer, currentModel, memory.id);
+                  updated++;
+                } else {
+                  errors++;
+                }
+              } catch {
+                errors++;
+              }
+            }
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  message: `Re-embedded ${updated} memories with ${errors} errors`,
+                  totalMemories: memories.length,
+                  updated,
+                  errors,
+                  model: currentModel,
                 }),
               },
             ],

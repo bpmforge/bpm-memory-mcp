@@ -6,10 +6,14 @@
   "engines": {
     "node": ">=22.0.0"
   },
+  "bin": {
+    "memory-cli": "mcp/memory-server/dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p mcp/memory-server/tsconfig.json",
     "dev": "tsx watch mcp/memory-server/src/index.ts",
     "start": "node mcp/memory-server/dist/index.js",
+    "cli": "node mcp/memory-server/dist/cli.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

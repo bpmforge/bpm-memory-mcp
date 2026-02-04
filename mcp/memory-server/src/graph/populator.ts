@@ -58,22 +58,47 @@ const DEFAULT_CONFIG: PopulatorConfig = {
 
 /**
  * Patterns for extracting entity mentions from content
+ * Enhanced for V12 with better code detection
  */
 const ENTITY_PATTERNS = {
   // File paths: src/foo/bar.ts, ./utils.js, etc.
   filePath: /(?:^|[\s`"'(])([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./+-]+\.[a-zA-Z]+)/g,
 
+  // Function definitions: function name(), async function name(), const name = () =>
+  functionDef: /(?:function\s+|async\s+function\s+|const\s+|let\s+|var\s+)([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=\s*(?:async\s*)?\(|[(<])/g,
+
   // Function calls: functionName(), ClassName.method()
   functionCall: /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g,
 
+  // Class definitions: class ClassName, export class ClassName
+  classDef: /(?:^|export\s+)class\s+([A-Z][a-zA-Z0-9_]*)/gm,
+
+  // Interface/Type definitions: interface IName, type TName
+  typeDef: /(?:interface|type)\s+([A-Z][a-zA-Z0-9_]*)/g,
+
   // Class/Type references: ClassName, TypeName (PascalCase)
-  className: /\b([A-Z][a-zA-Z0-9]+)(?:\s|$|[.,;:)])/g,
+  className: /\b([A-Z][a-zA-Z0-9]+)(?:\s|$|[.,;:)<>])/g,
 
   // Method references: .methodName or ->methodName
   methodRef: /(?:\.|->)([a-zA-Z_][a-zA-Z0-9_]*)/g,
 
   // Import/require statements
   importPath: /(?:from|require)\s*[('"]([^'"]+)['"]/g,
+
+  // Python function definitions: def function_name(
+  pythonFunctionDef: /def\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g,
+
+  // Python class definitions: class ClassName:
+  pythonClassDef: /class\s+([A-Z][a-zA-Z0-9_]*)\s*[:(]/g,
+
+  // Go function definitions: func functionName( or func (r *Receiver) methodName(
+  goFunctionDef: /func\s+(?:\([^)]*\)\s*)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g,
+
+  // Rust function definitions: fn function_name( or pub fn function_name(
+  rustFunctionDef: /(?:pub\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*[(<]/g,
+
+  // Rust struct/enum definitions
+  rustTypeDef: /(?:pub\s+)?(?:struct|enum)\s+([A-Z][a-zA-Z0-9_]*)/g,
 };
 
 /**
