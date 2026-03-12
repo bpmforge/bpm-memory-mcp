@@ -54,6 +54,16 @@ export enum FeedbackType {
   DUPLICATE = 'duplicate',
 }
 
+// Source types for research-backed facts (V9)
+export enum SourceType {
+  OFFICIAL_DOCS = 'official_docs',
+  ENGINEERING_BLOG = 'engineering_blog',
+  ACADEMIC = 'academic',
+  NEWS = 'news',
+  FORUM = 'forum',
+  UNKNOWN = 'unknown',
+}
+
 // Memory scope for global vs project-specific memories
 export enum MemoryScope {
   PROJECT = 'project',
@@ -197,6 +207,16 @@ export interface Memory {
   goalPriority: number | null;
   parentGoalId: string | null;
   checkpointData: CheckpointState | null;
+  // V9 fields (fact store)
+  sourceUrl: string | null;
+  sourceTitle: string | null;
+  sourceType: SourceType | null;
+  directQuote: string | null;
+  domainTags: string[] | null;
+  staleAfterDays: number | null;
+  lastVerified: Date | null;
+  usedIn: string[] | null;
+  extractedBy: string | null;
 }
 
 export interface MemoryFeedback {
@@ -377,9 +397,22 @@ export const GoalStatusSchema = z.nativeEnum(GoalStatus);
 export const MemoryScopeSchema = z.nativeEnum(MemoryScope);
 
 export const LanguageSchema = z.enum([
-  'typescript', 'javascript', 'python', 'rust', 'go', 'java',
-  'c', 'cpp', 'ruby', 'php', 'shell', 'sql',
-  'markdown', 'json', 'yaml', 'other',
+  'typescript',
+  'javascript',
+  'python',
+  'rust',
+  'go',
+  'java',
+  'c',
+  'cpp',
+  'ruby',
+  'php',
+  'shell',
+  'sql',
+  'markdown',
+  'json',
+  'yaml',
+  'other',
 ]);
 
 export const CodeContextSchema = z.object({
@@ -459,11 +492,18 @@ export const GoalAnchorInputSchema = z.object({
 
 export const MemoryLinkInputSchema = z.object({
   action: z.enum([
-    'create', 'find_related', 'get_links',
+    'create',
+    'find_related',
+    'get_links',
     // V5: Graph query actions
-    'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans',
+    'get_stats',
+    'find_contradictions',
+    'find_chain',
+    'find_cluster',
+    'find_orphans',
     // V11: Knowledge graph entity queries
-    'get_entities', 'find_by_entity'
+    'get_entities',
+    'find_by_entity',
   ]),
   sourceId: z.string().uuid().optional(),
   targetId: z.string().uuid().optional(),
@@ -489,6 +529,46 @@ export const CheckpointTaskInputSchema = z.object({
   artifacts: z.array(z.string().max(500)).optional(),
 });
 
+// V9: Fact Store schemas
+export const SourceTypeSchema = z.nativeEnum(SourceType);
+
+export const FactStoreInputSchema = z.object({
+  claim: z.string().min(1).max(5000).describe('A clear, specific factual claim'),
+  directQuote: z.string().min(1).max(5000).describe('Exact text from source supporting the claim'),
+  sourceUrl: z.string().url().describe('URL of the source'),
+  sourceTitle: z.string().min(1).max(500).describe('Title of the source page/document'),
+  sourceType: SourceTypeSchema.optional().default(SourceType.UNKNOWN),
+  confidence: z.number().min(0).max(1).optional().default(0.6),
+  domainTags: z.array(z.string().max(50)).max(20).optional().default([]),
+  staleAfterDays: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe('Days until this fact should be re-verified'),
+  extractedBy: z.string().max(100).optional().default('research-agent'),
+  scope: MemoryScopeSchema.optional().default(MemoryScope.PROJECT),
+});
+
+export const FactQueryInputSchema = z.object({
+  query: z.string().min(1).max(1000).describe('Semantic search query'),
+  domainTags: z.array(z.string()).optional().describe('Filter by domain tags (AND logic)'),
+  sourceType: SourceTypeSchema.optional().describe('Filter by source type'),
+  minConfidence: z.number().min(0).max(1).optional().default(0),
+  limit: z.number().int().min(1).max(50).optional().default(10),
+  includeStale: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Include facts past their stale_after_days'),
+  includeContradictions: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe('Include contradicting facts in results'),
+  scope: z.enum(['project', 'global', 'both']).optional().default('both'),
+});
+
 // Type exports from Zod schemas
 export type MemoryStoreInput = z.infer<typeof MemoryStoreInputSchema>;
 export type MemoryRecallInput = z.infer<typeof MemoryRecallInputSchema>;
@@ -500,3 +580,5 @@ export type GraphQueryInput = z.infer<typeof GraphQueryInputSchema>;
 export type GoalAnchorInput = z.infer<typeof GoalAnchorInputSchema>;
 export type MemoryLinkInput = z.infer<typeof MemoryLinkInputSchema>;
 export type CheckpointTaskInput = z.infer<typeof CheckpointTaskInputSchema>;
+export type FactStoreInput = z.infer<typeof FactStoreInputSchema>;
+export type FactQueryInput = z.infer<typeof FactQueryInputSchema>;

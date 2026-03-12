@@ -9,7 +9,14 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { connectionPool, runMigrations, getProjectId, GLOBAL_PROJECT_ID, listAllProjects, getProjectMetadata } from './storage/index.js';
+import {
+  connectionPool,
+  runMigrations,
+  getProjectId,
+  GLOBAL_PROJECT_ID,
+  listAllProjects,
+  getProjectMetadata,
+} from './storage/index.js';
 import { EmbeddingService, loadConfig } from './embeddings/index.js';
 import { HybridSearch } from './search/index.js';
 import { MemoryRepository } from './storage/repository.js';
@@ -29,9 +36,13 @@ import {
   GoalAnchorInputSchema,
   MemoryLinkInputSchema,
   CheckpointTaskInputSchema,
+  FactStoreInputSchema,
+  FactQueryInputSchema,
   FeedbackType,
   MemoryLinkType,
+  MemoryLink,
   MemoryScope,
+  MemoryType,
   type MemoryCreateInput,
   type SearchOptions,
   type CodeContext,
@@ -44,22 +55,100 @@ import { ContradictionDetector } from './validation/contradictions.js';
 import { AutoLinker } from './linking/index.js';
 import { extractMemories, detectCitation } from './extraction/index.js';
 import { ConsolidationService, type ConsolidationOptions } from './consolidation/index.js';
-import { MemoryGraphService, KnowledgeGraphPopulator, type PopulationResult } from './graph/index.js';
-import { estimateTokens, truncateToTokenBudget, fitItemsToTokenBudget, TOKEN_BUDGETS } from './utils/index.js';
+import {
+  MemoryGraphService,
+  KnowledgeGraphPopulator,
+  type PopulationResult,
+} from './graph/index.js';
+import {
+  estimateTokens,
+  truncateToTokenBudget,
+  fitItemsToTokenBudget,
+  TOKEN_BUDGETS,
+} from './utils/index.js';
 
 // Storage quota: maximum memories per project
 const MAX_MEMORIES_PER_PROJECT = 10000;
 
 // Common stop words to filter from keyword extraction
 const STOP_WORDS = new Set([
-  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
-  'may', 'might', 'must', 'shall', 'can', 'need', 'dare', 'ought', 'used',
-  'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into',
-  'through', 'during', 'before', 'after', 'above', 'below', 'between',
-  'and', 'but', 'or', 'nor', 'so', 'yet', 'both', 'either', 'neither',
-  'not', 'only', 'own', 'same', 'than', 'too', 'very', 'just', 'also',
-  'this', 'that', 'these', 'those', 'it', 'its', 'i', 'we', 'you', 'he', 'she', 'they',
+  'a',
+  'an',
+  'the',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'have',
+  'has',
+  'had',
+  'do',
+  'does',
+  'did',
+  'will',
+  'would',
+  'could',
+  'should',
+  'may',
+  'might',
+  'must',
+  'shall',
+  'can',
+  'need',
+  'dare',
+  'ought',
+  'used',
+  'to',
+  'of',
+  'in',
+  'for',
+  'on',
+  'with',
+  'at',
+  'by',
+  'from',
+  'as',
+  'into',
+  'through',
+  'during',
+  'before',
+  'after',
+  'above',
+  'below',
+  'between',
+  'and',
+  'but',
+  'or',
+  'nor',
+  'so',
+  'yet',
+  'both',
+  'either',
+  'neither',
+  'not',
+  'only',
+  'own',
+  'same',
+  'than',
+  'too',
+  'very',
+  'just',
+  'also',
+  'this',
+  'that',
+  'these',
+  'those',
+  'it',
+  'its',
+  'i',
+  'we',
+  'you',
+  'he',
+  'she',
+  'they',
 ]);
 
 /**
@@ -70,7 +159,7 @@ function extractKeywords(text: string, maxKeywords: number = 5): string[] {
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, ' ')
     .split(/\s+/)
-    .filter(w => w.length > 2 && !STOP_WORDS.has(w));
+    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
 
   // Count word frequency
   const freq = new Map<string, number>();
@@ -168,7 +257,11 @@ async function initializeGlobalScope(): Promise<{
   memoryRepository: MemoryRepository;
 }> {
   if (globalEmbeddingService && globalHybridSearch && globalMemoryRepository) {
-    return { embeddingService: globalEmbeddingService, hybridSearch: globalHybridSearch, memoryRepository: globalMemoryRepository };
+    return {
+      embeddingService: globalEmbeddingService,
+      hybridSearch: globalHybridSearch,
+      memoryRepository: globalMemoryRepository,
+    };
   }
 
   const db = connectionPool.get(GLOBAL_PROJECT_ID);
@@ -181,7 +274,11 @@ async function initializeGlobalScope(): Promise<{
   globalHybridSearch = new HybridSearch(db, globalEmbeddingService);
   globalMemoryRepository = new MemoryRepository(db);
 
-  return { embeddingService: globalEmbeddingService, hybridSearch: globalHybridSearch, memoryRepository: globalMemoryRepository };
+  return {
+    embeddingService: globalEmbeddingService,
+    hybridSearch: globalHybridSearch,
+    memoryRepository: globalMemoryRepository,
+  };
 }
 
 /**
@@ -228,7 +325,24 @@ function createServer(): Server {
             // V2 fields
             language: {
               type: 'string',
-              enum: ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'c', 'cpp', 'ruby', 'php', 'shell', 'sql', 'markdown', 'json', 'yaml', 'other'],
+              enum: [
+                'typescript',
+                'javascript',
+                'python',
+                'rust',
+                'go',
+                'java',
+                'c',
+                'cpp',
+                'ruby',
+                'php',
+                'shell',
+                'sql',
+                'markdown',
+                'json',
+                'yaml',
+                'other',
+              ],
               description: 'Programming language (auto-detected from citation if not provided)',
             },
             codeContext: {
@@ -238,14 +352,18 @@ function createServer(): Server {
                 startLine: { type: 'integer', minimum: 1, description: 'Starting line number' },
                 endLine: { type: 'integer', minimum: 1, description: 'Ending line number' },
                 symbolName: { type: 'string', description: 'Function/class/variable name' },
-                symbolType: { type: 'string', enum: ['function', 'class', 'variable', 'type', 'module', 'method'] },
+                symbolType: {
+                  type: 'string',
+                  enum: ['function', 'class', 'variable', 'type', 'module', 'method'],
+                },
               },
               description: 'Structured code context (auto-parsed from citation if not provided)',
             },
             scope: {
               type: 'string',
               enum: ['project', 'global'],
-              description: 'Memory scope: "project" (default) for project-specific, "global" for cross-project memories',
+              description:
+                'Memory scope: "project" (default) for project-specific, "global" for cross-project memories',
             },
           },
           required: ['content'],
@@ -264,19 +382,48 @@ function createServer(): Server {
               description: 'Filter by memory type',
             },
             limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max results' },
-            minConfidence: { type: 'number', minimum: 0, maximum: 1, description: 'Min confidence' },
+            minConfidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+              description: 'Min confidence',
+            },
             // V2 filters
             language: {
               type: 'string',
-              enum: ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'c', 'cpp', 'ruby', 'php', 'shell', 'sql', 'markdown', 'json', 'yaml', 'other'],
+              enum: [
+                'typescript',
+                'javascript',
+                'python',
+                'rust',
+                'go',
+                'java',
+                'c',
+                'cpp',
+                'ruby',
+                'php',
+                'shell',
+                'sql',
+                'markdown',
+                'json',
+                'yaml',
+                'other',
+              ],
               description: 'Filter by programming language',
             },
-            includeStale: { type: 'boolean', description: 'Include flagged-stale memories (default: false)' },
-            includeSuperseded: { type: 'boolean', description: 'Include superseded versions (default: false)' },
+            includeStale: {
+              type: 'boolean',
+              description: 'Include flagged-stale memories (default: false)',
+            },
+            includeSuperseded: {
+              type: 'boolean',
+              description: 'Include superseded versions (default: false)',
+            },
             scope: {
               type: 'string',
               enum: ['project', 'global', 'both', 'all'],
-              description: 'Search scope: "project" for current project only, "global" for global memories only, "both" (default) for project + global, "all" for ALL projects (cross-project search)',
+              description:
+                'Search scope: "project" for current project only, "global" for global memories only, "both" (default) for project + global, "all" for ALL projects (cross-project search)',
             },
           },
           required: ['query'],
@@ -305,7 +452,24 @@ function createServer(): Server {
             // V2 optional updates
             language: {
               type: 'string',
-              enum: ['typescript', 'javascript', 'python', 'rust', 'go', 'java', 'c', 'cpp', 'ruby', 'php', 'shell', 'sql', 'markdown', 'json', 'yaml', 'other'],
+              enum: [
+                'typescript',
+                'javascript',
+                'python',
+                'rust',
+                'go',
+                'java',
+                'c',
+                'cpp',
+                'ruby',
+                'php',
+                'shell',
+                'sql',
+                'markdown',
+                'json',
+                'yaml',
+                'other',
+              ],
               description: 'Update programming language',
             },
           },
@@ -325,7 +489,11 @@ function createServer(): Server {
               description: 'Type of feedback',
             },
             correction: { type: 'string', description: 'Corrected content (for wrong/outdated)' },
-            duplicateOf: { type: 'string', format: 'uuid', description: 'Canonical memory ID (for duplicate)' },
+            duplicateOf: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Canonical memory ID (for duplicate)',
+            },
           },
           required: ['id', 'feedback'],
         },
@@ -367,7 +535,11 @@ function createServer(): Server {
               maximum: 5,
               description: 'Priority 1-5 where 1 is highest (for "set")',
             },
-            goalId: { type: 'string', format: 'uuid', description: 'Goal ID (for "complete"/"check")' },
+            goalId: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Goal ID (for "complete"/"check")',
+            },
             note: { type: 'string', description: 'Completion note (for "complete")' },
           },
           required: ['action'],
@@ -375,17 +547,38 @@ function createServer(): Server {
       },
       {
         name: 'memory_link',
-        description: 'Create and query Zettelkasten-style links between memories. Supports graph queries for contradictions, chains, clusters, statistics, and knowledge graph entities.',
+        description:
+          'Create and query Zettelkasten-style links between memories. Supports graph queries for contradictions, chains, clusters, statistics, and knowledge graph entities.',
         inputSchema: {
           type: 'object',
           properties: {
             action: {
               type: 'string',
-              enum: ['create', 'find_related', 'get_links', 'get_stats', 'find_contradictions', 'find_chain', 'find_cluster', 'find_orphans', 'get_entities', 'find_by_entity'],
-              description: 'Action: create/find_related/get_links (basic), get_stats/find_contradictions/find_chain/find_cluster/find_orphans (graph), get_entities/find_by_entity (knowledge graph)',
+              enum: [
+                'create',
+                'find_related',
+                'get_links',
+                'get_stats',
+                'find_contradictions',
+                'find_chain',
+                'find_cluster',
+                'find_orphans',
+                'get_entities',
+                'find_by_entity',
+              ],
+              description:
+                'Action: create/find_related/get_links (basic), get_stats/find_contradictions/find_chain/find_cluster/find_orphans (graph), get_entities/find_by_entity (knowledge graph)',
             },
-            sourceId: { type: 'string', format: 'uuid', description: 'Source memory ID (for "create")' },
-            targetId: { type: 'string', format: 'uuid', description: 'Target memory ID (for "create")' },
+            sourceId: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Source memory ID (for "create")',
+            },
+            targetId: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Target memory ID (for "create")',
+            },
             linkType: {
               type: 'string',
               enum: ['relates_to', 'contradicts', 'supports', 'extends', 'derived_from'],
@@ -393,14 +586,28 @@ function createServer(): Server {
             },
             strength: { type: 'number', minimum: 0, maximum: 1, description: 'Link strength 0-1' },
             bidirectional: { type: 'boolean', description: 'Whether link works both directions' },
-            memoryId: { type: 'string', format: 'uuid', description: 'Memory ID (for find_related/get_links/find_chain/find_cluster/get_entities)' },
-            entityName: { type: 'string', description: 'Entity name to search (for find_by_entity, e.g., file path or function name)' },
-            entityType: { type: 'string', enum: ['file', 'function', 'type', 'decision', 'error'], description: 'Entity type filter (for find_by_entity)' },
+            memoryId: {
+              type: 'string',
+              format: 'uuid',
+              description:
+                'Memory ID (for find_related/get_links/find_chain/find_cluster/get_entities)',
+            },
+            entityName: {
+              type: 'string',
+              description:
+                'Entity name to search (for find_by_entity, e.g., file path or function name)',
+            },
+            entityType: {
+              type: 'string',
+              enum: ['file', 'function', 'type', 'decision', 'error'],
+              description: 'Entity type filter (for find_by_entity)',
+            },
             depth: { type: 'integer', minimum: 1, maximum: 3, description: 'Traversal depth' },
             linkTypes: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Link types to follow for find_chain (default: extends, derived_from, supports)',
+              description:
+                'Link types to follow for find_chain (default: extends, derived_from, supports)',
             },
             direction: {
               type: 'string',
@@ -446,7 +653,8 @@ function createServer(): Server {
       // V8: Project management tools
       {
         name: 'memory_list_projects',
-        description: 'List all projects with memory databases. Shows project IDs, database sizes, and memory counts.',
+        description:
+          'List all projects with memory databases. Shows project IDs, database sizes, and memory counts.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -476,11 +684,15 @@ function createServer(): Server {
       // V9: Auto-extraction tools
       {
         name: 'memory_auto_extract',
-        description: 'Analyze text and automatically extract memories. Returns candidates for review or auto-stores them.',
+        description:
+          'Analyze text and automatically extract memories. Returns candidates for review or auto-stores them.',
         inputSchema: {
           type: 'object',
           properties: {
-            content: { type: 'string', description: 'Text to analyze (conversation, error output, code changes, etc.)' },
+            content: {
+              type: 'string',
+              description: 'Text to analyze (conversation, error output, code changes, etc.)',
+            },
             context: { type: 'string', description: 'Optional context about what was happening' },
             source: {
               type: 'string',
@@ -489,7 +701,8 @@ function createServer(): Server {
             },
             autoStore: {
               type: 'boolean',
-              description: 'If true, automatically store extracted memories. If false, just return candidates for review.',
+              description:
+                'If true, automatically store extracted memories. If false, just return candidates for review.',
             },
             minConfidence: {
               type: 'number',
@@ -504,7 +717,8 @@ function createServer(): Server {
       // V9: Proactive context assembly
       {
         name: 'memory_context_assemble',
-        description: 'Assemble relevant memory context for a task. Call this BEFORE starting significant work to get relevant past decisions, patterns, and constraints. Returns formatted context to consider.',
+        description:
+          'Assemble relevant memory context for a task. Call this BEFORE starting significant work to get relevant past decisions, patterns, and constraints. Returns formatted context to consider.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -528,7 +742,8 @@ function createServer(): Server {
               type: 'integer',
               minimum: 100,
               maximum: 10000,
-              description: 'Maximum tokens for assembled context. Memories will be truncated to fit. Presets: 500 (minimal), 2000 (standard), 4000 (detailed), 8000 (maximum)',
+              description:
+                'Maximum tokens for assembled context. Memories will be truncated to fit. Presets: 500 (minimal), 2000 (standard), 4000 (detailed), 8000 (maximum)',
             },
           },
           required: ['task'],
@@ -537,7 +752,8 @@ function createServer(): Server {
       // V10: Memory consolidation
       {
         name: 'memory_consolidate',
-        description: 'Run memory consolidation: merge duplicates, decay unused memories, identify clusters for summarization. Run periodically to keep memory healthy.',
+        description:
+          'Run memory consolidation: merge duplicates, decay unused memories, identify clusters for summarization. Run periodically to keep memory healthy.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -561,7 +777,8 @@ function createServer(): Server {
             },
             dryRun: {
               type: 'boolean',
-              description: 'If true, report what would happen without making changes (default: false)',
+              description:
+                'If true, report what would happen without making changes (default: false)',
             },
           },
         },
@@ -569,7 +786,8 @@ function createServer(): Server {
       // V12: Re-embedding tool
       {
         name: 'memory_reembed',
-        description: 'Re-generate embeddings for all memories using the current embedding model. Use when changing embedding models or to fix corrupted embeddings.',
+        description:
+          'Re-generate embeddings for all memories using the current embedding model. Use when changing embedding models or to fix corrupted embeddings.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -581,13 +799,113 @@ function createServer(): Server {
             },
             dryRun: {
               type: 'boolean',
-              description: 'If true, report what would happen without making changes (default: false)',
+              description:
+                'If true, report what would happen without making changes (default: false)',
             },
             onlyMissing: {
               type: 'boolean',
               description: 'If true, only re-embed memories without embeddings (default: false)',
             },
           },
+        },
+      },
+      // V9: Fact Store tools
+      {
+        name: 'fact_store',
+        description:
+          'Store a structured, cited fact extracted from a web source. Used by the research pipeline to build a grounded Fact Bank. Each fact has a claim, direct quote, source URL, and confidence score. Facts are the anti-hallucination layer — synthesis can only reference stored facts.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            claim: {
+              type: 'string',
+              description: 'A clear, specific factual claim extracted from the source',
+            },
+            directQuote: {
+              type: 'string',
+              description: 'The exact text from the source supporting this claim',
+            },
+            sourceUrl: { type: 'string', format: 'uri', description: 'URL of the source' },
+            sourceTitle: { type: 'string', description: 'Title of the source page or document' },
+            sourceType: {
+              type: 'string',
+              enum: ['official_docs', 'engineering_blog', 'academic', 'news', 'forum', 'unknown'],
+              description: 'Type of source (affects credibility weighting)',
+            },
+            confidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+              description: 'Initial confidence (default: 0.6, increases with corroboration)',
+            },
+            domainTags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Domain tags for filtering (e.g., ["go", "gc", "performance"])',
+            },
+            staleAfterDays: {
+              type: 'integer',
+              minimum: 1,
+              description: 'Days until this fact should be re-verified (omit for evergreen facts)',
+            },
+            extractedBy: {
+              type: 'string',
+              description: 'Agent or process that extracted this fact',
+            },
+            scope: {
+              type: 'string',
+              enum: ['project', 'global'],
+              description: 'Memory scope (default: project)',
+            },
+          },
+          required: ['claim', 'directQuote', 'sourceUrl', 'sourceTitle'],
+        },
+      },
+      {
+        name: 'fact_query',
+        description:
+          'Query the Fact Bank for structured, cited facts. Supports semantic search, domain tag filtering, source type filtering, and confidence thresholds. Returns facts with their citations, confidence scores, and relationships (corroborating/contradicting facts).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Semantic search query to find relevant facts' },
+            domainTags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Filter by domain tags (facts must have ALL specified tags)',
+            },
+            sourceType: {
+              type: 'string',
+              enum: ['official_docs', 'engineering_blog', 'academic', 'news', 'forum', 'unknown'],
+              description: 'Filter by source type',
+            },
+            minConfidence: {
+              type: 'number',
+              minimum: 0,
+              maximum: 1,
+              description: 'Minimum confidence threshold (default: 0)',
+            },
+            limit: {
+              type: 'integer',
+              minimum: 1,
+              maximum: 50,
+              description: 'Max results (default: 10)',
+            },
+            includeStale: {
+              type: 'boolean',
+              description: 'Include facts past their stale_after_days (default: false)',
+            },
+            includeContradictions: {
+              type: 'boolean',
+              description: 'Include contradicting facts in results (default: true)',
+            },
+            scope: {
+              type: 'string',
+              enum: ['project', 'global', 'both'],
+              description: 'Search scope (default: both)',
+            },
+          },
+          required: ['query'],
         },
       },
     ],
@@ -618,15 +936,24 @@ function createServer(): Server {
           // V6: Determine scope - use global or project services
           const isGlobal = input.scope === MemoryScope.GLOBAL;
           const targetProjectId = isGlobal ? GLOBAL_PROJECT_ID : projectId;
-          const targetRepo = isGlobal ? (await initializeGlobalScope()).memoryRepository : memoryRepository;
-          const targetEmbedding = isGlobal ? (await initializeGlobalScope()).embeddingService : embeddingService;
+          const targetRepo = isGlobal
+            ? (await initializeGlobalScope()).memoryRepository
+            : memoryRepository;
+          const targetEmbedding = isGlobal
+            ? (await initializeGlobalScope()).embeddingService
+            : embeddingService;
 
           // Security checks (can be disabled for benchmarking)
           if (!HARDENING_DISABLED) {
             // Security: Check for credentials (SC-001)
             if (containsCredentials(input.content)) {
               return {
-                content: [{ type: 'text', text: 'Error: Content appears to contain credentials or secrets. Memory not stored.' }],
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Error: Content appears to contain credentials or secrets. Memory not stored.',
+                  },
+                ],
                 isError: true,
               };
             }
@@ -636,7 +963,9 @@ function createServer(): Server {
               const parsed = parseCodeContext(input.citation);
               if (parsed && !isPathSafe(parsed.filePath, projectRoot)) {
                 return {
-                  content: [{ type: 'text', text: 'Error: Citation path is outside project root.' }],
+                  content: [
+                    { type: 'text', text: 'Error: Citation path is outside project root.' },
+                  ],
                   isError: true,
                 };
               }
@@ -645,7 +974,12 @@ function createServer(): Server {
             // Security: Check storage quota
             if (targetRepo.getMemoryCount(targetProjectId) >= MAX_MEMORIES_PER_PROJECT) {
               return {
-                content: [{ type: 'text', text: `Error: Storage limit reached (${MAX_MEMORIES_PER_PROJECT} memories). Consider archiving or deleting old memories.` }],
+                content: [
+                  {
+                    type: 'text',
+                    text: `Error: Storage limit reached (${MAX_MEMORIES_PER_PROJECT} memories). Consider archiving or deleting old memories.`,
+                  },
+                ],
                 isError: true,
               };
             }
@@ -677,8 +1011,10 @@ function createServer(): Server {
               startLine: input.codeContext.startLine,
             };
             if (input.codeContext.endLine !== undefined) ctx.endLine = input.codeContext.endLine;
-            if (input.codeContext.symbolName !== undefined) ctx.symbolName = input.codeContext.symbolName;
-            if (input.codeContext.symbolType !== undefined) ctx.symbolType = input.codeContext.symbolType;
+            if (input.codeContext.symbolName !== undefined)
+              ctx.symbolName = input.codeContext.symbolName;
+            if (input.codeContext.symbolType !== undefined)
+              ctx.symbolType = input.codeContext.symbolType;
             memoryInput.codeContext = ctx;
           }
 
@@ -707,7 +1043,11 @@ function createServer(): Server {
             }
           }
 
-          const memory = targetRepo.createMemory(memoryInput, embedding, isGlobal ? undefined : projectRoot);
+          const memory = targetRepo.createMemory(
+            memoryInput,
+            embedding,
+            isGlobal ? undefined : projectRoot
+          );
 
           // V4: Auto-link to related memories
           let autoLinkResult: {
@@ -813,9 +1153,28 @@ function createServer(): Server {
           if (input.language) baseOptions.language = input.language;
 
           // Collect results from scopes
-          type MemoryResult = { id: string; content: string; type: string; confidence: number; citation: string | null; relevance: number; language: string | null; version: number; isSuperseded: boolean; isStale: boolean; scope: string; projectId?: string };
+          type MemoryResult = {
+            id: string;
+            content: string;
+            type: string;
+            confidence: number;
+            citation: string | null;
+            relevance: number;
+            language: string | null;
+            version: number;
+            isSuperseded: boolean;
+            isStale: boolean;
+            scope: string;
+            projectId?: string;
+          };
           let allResults: MemoryResult[] = [];
-          let combinedStats = { vectorMatches: 0, bm25Matches: 0, fusedResults: 0, latencyMs: 0, projectsSearched: 1 };
+          let combinedStats = {
+            vectorMatches: 0,
+            bm25Matches: 0,
+            fusedResults: 0,
+            latencyMs: 0,
+            projectsSearched: 1,
+          };
 
           // V8: Cross-project search (all projects)
           if (searchAll) {
@@ -833,7 +1192,10 @@ function createServer(): Server {
                 const projSearch = new HybridSearch(db, projEmbedding);
                 const projRepo = new MemoryRepository(db);
 
-                const searchOptions: SearchOptions = { ...baseOptions, projectId: pid } as SearchOptions;
+                const searchOptions: SearchOptions = {
+                  ...baseOptions,
+                  projectId: pid,
+                } as SearchOptions;
                 const response = await projSearch.search(input.query, searchOptions);
 
                 for (const result of response.memories) {
@@ -892,7 +1254,10 @@ function createServer(): Server {
             // Search global scope
             if (searchGlobal) {
               const globalServices = await initializeGlobalScope();
-              const searchOptions: SearchOptions = { ...baseOptions, projectId: GLOBAL_PROJECT_ID } as SearchOptions;
+              const searchOptions: SearchOptions = {
+                ...baseOptions,
+                projectId: GLOBAL_PROJECT_ID,
+              } as SearchOptions;
               const response = await globalServices.hybridSearch.search(input.query, searchOptions);
 
               for (const result of response.memories) {
@@ -946,7 +1311,11 @@ function createServer(): Server {
           if (!success) {
             try {
               const globalServices = await initializeGlobalScope();
-              success = globalServices.memoryRepository.softDelete(input.id, GLOBAL_PROJECT_ID, input.reason);
+              success = globalServices.memoryRepository.softDelete(
+                input.id,
+                GLOBAL_PROJECT_ID,
+                input.reason
+              );
               scope = 'global';
             } catch {
               // Global scope not available
@@ -1002,7 +1371,10 @@ function createServer(): Server {
           // Try global scope
           try {
             const globalServices = await initializeGlobalScope();
-            const globalMemory = globalServices.memoryRepository.findById(input.id, GLOBAL_PROJECT_ID);
+            const globalMemory = globalServices.memoryRepository.findById(
+              input.id,
+              GLOBAL_PROJECT_ID
+            );
 
             if (globalMemory) {
               const embedding = await globalServices.embeddingService.embed(input.content);
@@ -1079,7 +1451,10 @@ function createServer(): Server {
             // Try global scope
             try {
               const globalServices = await initializeGlobalScope();
-              const globalMemory = globalServices.memoryRepository.findById(input.id, GLOBAL_PROJECT_ID);
+              const globalMemory = globalServices.memoryRepository.findById(
+                input.id,
+                GLOBAL_PROJECT_ID
+              );
 
               if (globalMemory) {
                 scope = 'global';
@@ -1091,7 +1466,10 @@ function createServer(): Server {
                   input.duplicateOf
                 );
 
-                if (input.correction && (input.feedback === 'wrong' || input.feedback === 'outdated')) {
+                if (
+                  input.correction &&
+                  (input.feedback === 'wrong' || input.feedback === 'outdated')
+                ) {
                   const embedding = await globalServices.embeddingService.embed(input.correction);
                   const newMemory = globalServices.memoryRepository.createSupersedingMemory(
                     input.id,
@@ -1181,7 +1559,12 @@ function createServer(): Server {
 
                   // Auto-link
                   if (autoLinker && embedding) {
-                    await autoLinker.processNewMemory(memory.id, memory.content, embedding, projectId);
+                    await autoLinker.processNewMemory(
+                      memory.id,
+                      memory.content,
+                      embedding,
+                      projectId
+                    );
                   }
 
                   extractedMemories.push({
@@ -1204,9 +1587,10 @@ function createServer(): Server {
                   sessionId,
                   summary,
                   extractedMemories,
-                  message: extractedMemories.length > 0
-                    ? `Session saved. Auto-extracted ${extractedMemories.length} memories.`
-                    : 'Session saved successfully',
+                  message:
+                    extractedMemories.length > 0
+                      ? `Session saved. Auto-extracted ${extractedMemories.length} memories.`
+                      : 'Session saved successfully',
                 }),
               },
             ],
@@ -1225,18 +1609,29 @@ function createServer(): Server {
 
           if (!session) {
             // Run staleness detection even for new sessions (can be disabled for benchmarking)
-            const staleReport = (stalenessDetector && !HARDENING_DISABLED) ? {
-              accessStale: stalenessDetector.detectAccessStale(projectId).length,
-              sourceMissing: stalenessDetector.detectSourceMissing(projectId, projectRoot).length,
-              lowConfidence: stalenessDetector.detectLowConfidence(projectId).length,
-              contentChanged: stalenessDetector.detectContentChanged(projectId, projectRoot).length,
-            } : null;
+            const staleReport =
+              stalenessDetector && !HARDENING_DISABLED
+                ? {
+                    accessStale: stalenessDetector.detectAccessStale(projectId).length,
+                    sourceMissing: stalenessDetector.detectSourceMissing(projectId, projectRoot)
+                      .length,
+                    lowConfidence: stalenessDetector.detectLowConfidence(projectId).length,
+                    contentChanged: stalenessDetector.detectContentChanged(projectId, projectRoot)
+                      .length,
+                  }
+                : null;
 
             // V3: Include active goals even for new sessions
             const activeGoals = goalRepository?.getActiveGoals(projectId) ?? [];
 
             // V7: Auto-recall for new sessions (project name only)
-            let autoRecalledMemories: Array<{ id: string; content: string; type: string; relevance: number; scope: string }> = [];
+            let autoRecalledMemories: Array<{
+              id: string;
+              content: string;
+              type: string;
+              relevance: number;
+              scope: string;
+            }> = [];
             if (hybridSearch && !HARDENING_DISABLED) {
               const projectName = projectRoot.split('/').pop() ?? 'project';
               const query = `${projectName} project status decisions constraints`;
@@ -1251,9 +1646,10 @@ function createServer(): Server {
               for (const result of response.memories) {
                 autoRecalledMemories.push({
                   id: result.memory.id,
-                  content: result.memory.content.length > 200
-                    ? result.memory.content.substring(0, 200) + '...'
-                    : result.memory.content,
+                  content:
+                    result.memory.content.length > 200
+                      ? result.memory.content.substring(0, 200) + '...'
+                      : result.memory.content,
                   type: result.memory.type,
                   relevance: Math.round(result.relevance * 100) / 100,
                   scope: 'project',
@@ -1268,14 +1664,18 @@ function createServer(): Server {
                   limit: 3,
                   minConfidence: 0.3,
                 };
-                const globalResponse = await globalServices.hybridSearch.search(query, globalSearchOptions);
+                const globalResponse = await globalServices.hybridSearch.search(
+                  query,
+                  globalSearchOptions
+                );
 
                 for (const result of globalResponse.memories) {
                   autoRecalledMemories.push({
                     id: result.memory.id,
-                    content: result.memory.content.length > 200
-                      ? result.memory.content.substring(0, 200) + '...'
-                      : result.memory.content,
+                    content:
+                      result.memory.content.length > 200
+                        ? result.memory.content.substring(0, 200) + '...'
+                        : result.memory.content,
                     type: result.memory.type,
                     relevance: Math.round(result.relevance * 100) / 100,
                     scope: 'global',
@@ -1311,12 +1711,17 @@ function createServer(): Server {
           }
 
           // Run staleness detection (can be disabled for benchmarking)
-          const staleReport = (stalenessDetector && !HARDENING_DISABLED) ? {
-            accessStale: stalenessDetector.detectAccessStale(projectId).length,
-            sourceMissing: stalenessDetector.detectSourceMissing(projectId, projectRoot).length,
-            lowConfidence: stalenessDetector.detectLowConfidence(projectId).length,
-            contentChanged: stalenessDetector.detectContentChanged(projectId, projectRoot).length,
-          } : null;
+          const staleReport =
+            stalenessDetector && !HARDENING_DISABLED
+              ? {
+                  accessStale: stalenessDetector.detectAccessStale(projectId).length,
+                  sourceMissing: stalenessDetector.detectSourceMissing(projectId, projectRoot)
+                    .length,
+                  lowConfidence: stalenessDetector.detectLowConfidence(projectId).length,
+                  contentChanged: stalenessDetector.detectContentChanged(projectId, projectRoot)
+                    .length,
+                }
+              : null;
 
           // Mark session as resumed
           sessionRepository.markResumed(session.id);
@@ -1333,29 +1738,50 @@ function createServer(): Server {
 
           // V5: Proactive context assembly
           let proactiveContext: {
-            graphStats: { totalMemories: number; linkedMemories: number; contradictionCount: number } | null;
+            graphStats: {
+              totalMemories: number;
+              linkedMemories: number;
+              contradictionCount: number;
+            } | null;
             recentContradictions: Array<{ source: string; target: string }>;
             incompleteCheckpoints: Array<{ taskId: string; phase: string; pendingSteps: number }>;
             // V7: Auto-recalled memories
-            autoRecalledMemories: Array<{ id: string; content: string; type: string; relevance: number; scope: string }>;
+            autoRecalledMemories: Array<{
+              id: string;
+              content: string;
+              type: string;
+              relevance: number;
+              scope: string;
+            }>;
           } | null = null;
 
           if (memoryGraphService && !HARDENING_DISABLED) {
             const graphStats = memoryGraphService.getStats(projectId);
             const contradictions = memoryGraphService.findContradictions(projectId);
-            const checkpoints = checkpointRepository?.listCheckpoints(projectId, { limit: 5 }) ?? [];
+            const checkpoints =
+              checkpointRepository?.listCheckpoints(projectId, { limit: 5 }) ?? [];
             const incompleteCheckpoints = checkpoints
               .filter((c) => c.pendingSteps.length > 0)
               .slice(0, 3);
 
             // V7: Auto-recall relevant memories based on project context
-            let autoRecalledMemories: Array<{ id: string; content: string; type: string; relevance: number; scope: string }> = [];
+            let autoRecalledMemories: Array<{
+              id: string;
+              content: string;
+              type: string;
+              relevance: number;
+              scope: string;
+            }> = [];
 
             if (hybridSearch) {
               // Build query from project context
               const projectName = projectRoot.split('/').pop() ?? 'project';
               const summaryKeywords = extractKeywords(session.conversationSummary, 5);
-              const query = [projectName, 'project status decisions constraints', ...summaryKeywords].join(' ');
+              const query = [
+                projectName,
+                'project status decisions constraints',
+                ...summaryKeywords,
+              ].join(' ');
 
               // Search project scope
               const searchOptions: SearchOptions = {
@@ -1368,9 +1794,10 @@ function createServer(): Server {
               for (const result of response.memories) {
                 autoRecalledMemories.push({
                   id: result.memory.id,
-                  content: result.memory.content.length > 200
-                    ? result.memory.content.substring(0, 200) + '...'
-                    : result.memory.content,
+                  content:
+                    result.memory.content.length > 200
+                      ? result.memory.content.substring(0, 200) + '...'
+                      : result.memory.content,
                   type: result.memory.type,
                   relevance: Math.round(result.relevance * 100) / 100,
                   scope: 'project',
@@ -1385,14 +1812,18 @@ function createServer(): Server {
                   limit: 3,
                   minConfidence: 0.3,
                 };
-                const globalResponse = await globalServices.hybridSearch.search(query, globalSearchOptions);
+                const globalResponse = await globalServices.hybridSearch.search(
+                  query,
+                  globalSearchOptions
+                );
 
                 for (const result of globalResponse.memories) {
                   autoRecalledMemories.push({
                     id: result.memory.id,
-                    content: result.memory.content.length > 200
-                      ? result.memory.content.substring(0, 200) + '...'
-                      : result.memory.content,
+                    content:
+                      result.memory.content.length > 200
+                        ? result.memory.content.substring(0, 200) + '...'
+                        : result.memory.content,
                     type: result.memory.type,
                     relevance: Math.round(result.relevance * 100) / 100,
                     scope: 'global',
@@ -1501,7 +1932,9 @@ function createServer(): Server {
             case 'complete': {
               if (!input.goalId) {
                 return {
-                  content: [{ type: 'text', text: 'Error: goalId is required for "complete" action' }],
+                  content: [
+                    { type: 'text', text: 'Error: goalId is required for "complete" action' },
+                  ],
                   isError: true,
                 };
               }
@@ -1609,7 +2042,12 @@ function createServer(): Server {
             case 'create': {
               if (!input.sourceId || !input.targetId || !input.linkType) {
                 return {
-                  content: [{ type: 'text', text: 'Error: sourceId, targetId, and linkType are required for "create" action' }],
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Error: sourceId, targetId, and linkType are required for "create" action',
+                    },
+                  ],
                   isError: true,
                 };
               }
@@ -1620,20 +2058,27 @@ function createServer(): Server {
 
               if (!source) {
                 return {
-                  content: [{ type: 'text', text: `Error: Source memory ${input.sourceId} not found` }],
+                  content: [
+                    { type: 'text', text: `Error: Source memory ${input.sourceId} not found` },
+                  ],
                   isError: true,
                 };
               }
 
               if (!target) {
                 return {
-                  content: [{ type: 'text', text: `Error: Target memory ${input.targetId} not found` }],
+                  content: [
+                    { type: 'text', text: `Error: Target memory ${input.targetId} not found` },
+                  ],
                   isError: true,
                 };
               }
 
               // Check for existing link
-              const existingLink = memoryLinkRepository.findLinkBetween(input.sourceId, input.targetId);
+              const existingLink = memoryLinkRepository.findLinkBetween(
+                input.sourceId,
+                input.targetId
+              );
               if (existingLink) {
                 return {
                   content: [
@@ -1679,7 +2124,9 @@ function createServer(): Server {
             case 'find_related': {
               if (!input.memoryId) {
                 return {
-                  content: [{ type: 'text', text: 'Error: memoryId is required for "find_related" action' }],
+                  content: [
+                    { type: 'text', text: 'Error: memoryId is required for "find_related" action' },
+                  ],
                   isError: true,
                 };
               }
@@ -1722,7 +2169,9 @@ function createServer(): Server {
             case 'get_links': {
               if (!input.memoryId) {
                 return {
-                  content: [{ type: 'text', text: 'Error: memoryId is required for "get_links" action' }],
+                  content: [
+                    { type: 'text', text: 'Error: memoryId is required for "get_links" action' },
+                  ],
                   isError: true,
                 };
               }
@@ -1797,9 +2246,10 @@ function createServer(): Server {
                         createdAt: c.createdAt.toISOString(),
                       })),
                       count: contradictions.length,
-                      message: contradictions.length > 0
-                        ? `Found ${contradictions.length} contradiction(s) to review`
-                        : 'No contradictions found',
+                      message:
+                        contradictions.length > 0
+                          ? `Found ${contradictions.length} contradiction(s) to review`
+                          : 'No contradictions found',
                     }),
                   },
                 ],
@@ -1816,7 +2266,9 @@ function createServer(): Server {
 
               if (!input.memoryId) {
                 return {
-                  content: [{ type: 'text', text: 'Error: memoryId is required for "find_chain" action' }],
+                  content: [
+                    { type: 'text', text: 'Error: memoryId is required for "find_chain" action' },
+                  ],
                   isError: true,
                 };
               }
@@ -1828,7 +2280,8 @@ function createServer(): Server {
               } = {};
               if (input.linkTypes) chainOptions.linkTypes = input.linkTypes as string[];
               if (input.depth) chainOptions.maxLength = input.depth;
-              if (input.direction) chainOptions.direction = input.direction as 'forward' | 'backward' | 'both';
+              if (input.direction)
+                chainOptions.direction = input.direction as 'forward' | 'backward' | 'both';
 
               const chain = memoryGraphService.findChain(input.memoryId, projectId, chainOptions);
 
@@ -1840,15 +2293,17 @@ function createServer(): Server {
                       startId: chain.startId,
                       nodes: chain.nodes.map((n) => ({
                         id: n.id,
-                        content: n.content.length > 100 ? n.content.substring(0, 100) + '...' : n.content,
+                        content:
+                          n.content.length > 100 ? n.content.substring(0, 100) + '...' : n.content,
                         type: n.type,
                         linkType: n.linkType,
                         createdAt: n.createdAt.toISOString(),
                       })),
                       length: chain.length,
-                      message: chain.length > 1
-                        ? `Found chain of ${chain.length} connected memories`
-                        : 'No connected memories found in chain',
+                      message:
+                        chain.length > 1
+                          ? `Found chain of ${chain.length} connected memories`
+                          : 'No connected memories found in chain',
                     }),
                   },
                 ],
@@ -1865,7 +2320,9 @@ function createServer(): Server {
 
               if (!input.memoryId) {
                 return {
-                  content: [{ type: 'text', text: 'Error: memoryId is required for "find_cluster" action' }],
+                  content: [
+                    { type: 'text', text: 'Error: memoryId is required for "find_cluster" action' },
+                  ],
                   isError: true,
                 };
               }
@@ -1873,7 +2330,11 @@ function createServer(): Server {
               const clusterOptions: { maxSize?: number; maxDepth?: number } = {};
               if (input.depth) clusterOptions.maxDepth = input.depth;
 
-              const cluster = memoryGraphService.findCluster(input.memoryId, projectId, clusterOptions);
+              const cluster = memoryGraphService.findCluster(
+                input.memoryId,
+                projectId,
+                clusterOptions
+              );
 
               return {
                 content: [
@@ -1884,9 +2345,10 @@ function createServer(): Server {
                       centerContent: cluster.centerContent,
                       members: cluster.members,
                       size: cluster.size,
-                      message: cluster.size > 1
-                        ? `Found cluster of ${cluster.size} memories`
-                        : 'Memory has no links',
+                      message:
+                        cluster.size > 1
+                          ? `Found cluster of ${cluster.size} memories`
+                          : 'Memory has no links',
                     }),
                   },
                 ],
@@ -1915,9 +2377,10 @@ function createServer(): Server {
                         createdAt: o.createdAt.toISOString(),
                       })),
                       count: orphans.length,
-                      message: orphans.length > 0
-                        ? `Found ${orphans.length} unlinked memories. Consider linking them for better recall.`
-                        : 'All memories are linked',
+                      message:
+                        orphans.length > 0
+                          ? `Found ${orphans.length} unlinked memories. Consider linking them for better recall.`
+                          : 'All memories are linked',
                     }),
                   },
                 ],
@@ -1928,19 +2391,26 @@ function createServer(): Server {
             case 'get_entities': {
               if (!knowledgeGraphPopulator) {
                 return {
-                  content: [{ type: 'text', text: 'Error: Knowledge graph populator not initialized' }],
+                  content: [
+                    { type: 'text', text: 'Error: Knowledge graph populator not initialized' },
+                  ],
                   isError: true,
                 };
               }
 
               if (!input.memoryId) {
                 return {
-                  content: [{ type: 'text', text: 'Error: memoryId is required for "get_entities" action' }],
+                  content: [
+                    { type: 'text', text: 'Error: memoryId is required for "get_entities" action' },
+                  ],
                   isError: true,
                 };
               }
 
-              const linkedEntities = knowledgeGraphPopulator.getLinkedEntities(input.memoryId, projectId);
+              const linkedEntities = knowledgeGraphPopulator.getLinkedEntities(
+                input.memoryId,
+                projectId
+              );
 
               return {
                 content: [
@@ -1955,9 +2425,10 @@ function createServer(): Server {
                         relationType: e.relationType,
                       })),
                       count: linkedEntities.length,
-                      message: linkedEntities.length > 0
-                        ? `Memory is linked to ${linkedEntities.length} entities`
-                        : 'Memory has no entity links',
+                      message:
+                        linkedEntities.length > 0
+                          ? `Memory is linked to ${linkedEntities.length} entities`
+                          : 'Memory has no entity links',
                     }),
                   },
                 ],
@@ -1967,7 +2438,9 @@ function createServer(): Server {
             case 'find_by_entity': {
               if (!knowledgeGraphPopulator) {
                 return {
-                  content: [{ type: 'text', text: 'Error: Knowledge graph populator not initialized' }],
+                  content: [
+                    { type: 'text', text: 'Error: Knowledge graph populator not initialized' },
+                  ],
                   isError: true,
                 };
               }
@@ -1977,7 +2450,12 @@ function createServer(): Server {
 
               if (!entityNameArg) {
                 return {
-                  content: [{ type: 'text', text: 'Error: entityName is required for "find_by_entity" action' }],
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Error: entityName is required for "find_by_entity" action',
+                    },
+                  ],
                   isError: true,
                 };
               }
@@ -1992,7 +2470,9 @@ function createServer(): Server {
                 ? [projectId, `%${entityNameArg}%`, entityTypeArg]
                 : [projectId, `%${entityNameArg}%`];
 
-              const matchingEntities = db.instance.prepare(entityQuery).all(...entityParams) as Array<{
+              const matchingEntities = db.instance
+                .prepare(entityQuery)
+                .all(...entityParams) as Array<{
                 id: string;
                 name: string;
                 type: string;
@@ -2029,11 +2509,11 @@ function createServer(): Server {
                    LIMIT 20`
                 )
                 .all(...entityIds) as Array<{
-                  id: string;
-                  content: string;
-                  type: string;
-                  entity_id: string;
-                }>;
+                id: string;
+                content: string;
+                type: string;
+                entity_id: string;
+              }>;
 
               return {
                 content: [
@@ -2049,7 +2529,8 @@ function createServer(): Server {
                       })),
                       memories: memoryRows.map((m) => ({
                         id: m.id,
-                        content: m.content.length > 150 ? m.content.substring(0, 150) + '...' : m.content,
+                        content:
+                          m.content.length > 150 ? m.content.substring(0, 150) + '...' : m.content,
                         type: m.type,
                         linkedEntity: matchingEntities.find((e) => e.id === m.entity_id)?.name,
                       })),
@@ -2082,7 +2563,12 @@ function createServer(): Server {
             case 'save': {
               if (!input.taskId || !input.phase) {
                 return {
-                  content: [{ type: 'text', text: 'Error: taskId and phase are required for "save" action' }],
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Error: taskId and phase are required for "save" action',
+                    },
+                  ],
                   isError: true,
                 };
               }
@@ -2127,7 +2613,9 @@ function createServer(): Server {
             case 'restore': {
               if (!input.taskId) {
                 return {
-                  content: [{ type: 'text', text: 'Error: taskId is required for "restore" action' }],
+                  content: [
+                    { type: 'text', text: 'Error: taskId is required for "restore" action' },
+                  ],
                   isError: true,
                 };
               }
@@ -2198,7 +2686,9 @@ function createServer(): Server {
 
             default:
               return {
-                content: [{ type: 'text', text: `Unknown checkpoint_task action: ${input.action}` }],
+                content: [
+                  { type: 'text', text: `Unknown checkpoint_task action: ${input.action}` },
+                ],
                 isError: true,
               };
           }
@@ -2260,11 +2750,17 @@ function createServer(): Server {
         }
 
         case 'memory_migrate': {
-          const { memoryId, targetScope, action } = args as { memoryId: string; targetScope: string; action: string };
+          const { memoryId, targetScope, action } = args as {
+            memoryId: string;
+            targetScope: string;
+            action: string;
+          };
 
           if (!memoryId || !targetScope || !action) {
             return {
-              content: [{ type: 'text', text: 'Error: memoryId, targetScope, and action are required' }],
+              content: [
+                { type: 'text', text: 'Error: memoryId, targetScope, and action are required' },
+              ],
               isError: true,
             };
           }
@@ -2285,7 +2781,9 @@ function createServer(): Server {
 
           if (!sourceMemory) {
             return {
-              content: [{ type: 'text', text: `Memory ${memoryId} not found in project or global scope` }],
+              content: [
+                { type: 'text', text: `Memory ${memoryId} not found in project or global scope` },
+              ],
               isError: true,
             };
           }
@@ -2299,8 +2797,12 @@ function createServer(): Server {
 
           // Get target services
           const targetIsGlobal = targetScope === 'global';
-          const targetRepo = targetIsGlobal ? (await initializeGlobalScope()).memoryRepository : memoryRepository;
-          const targetEmbedding = targetIsGlobal ? (await initializeGlobalScope()).embeddingService : embeddingService;
+          const targetRepo = targetIsGlobal
+            ? (await initializeGlobalScope()).memoryRepository
+            : memoryRepository;
+          const targetEmbedding = targetIsGlobal
+            ? (await initializeGlobalScope()).embeddingService
+            : embeddingService;
           const targetProjectId = targetIsGlobal ? GLOBAL_PROJECT_ID : projectId;
 
           // Create new embedding for target
@@ -2316,11 +2818,19 @@ function createServer(): Server {
           if (sourceMemory.citation) createInput.citation = sourceMemory.citation;
           if (sourceMemory.language) createInput.language = sourceMemory.language;
 
-          const newMemory = targetRepo.createMemory(createInput, newEmbedding, targetIsGlobal ? undefined : projectRoot);
+          const newMemory = targetRepo.createMemory(
+            createInput,
+            newEmbedding,
+            targetIsGlobal ? undefined : projectRoot
+          );
 
           // If move (not copy), delete from source
           if (action === 'move') {
-            sourceRepo.softDelete(memoryId, sourceScope === 'global' ? GLOBAL_PROJECT_ID : projectId, `Migrated to ${targetScope} scope`);
+            sourceRepo.softDelete(
+              memoryId,
+              sourceScope === 'global' ? GLOBAL_PROJECT_ID : projectId,
+              `Migrated to ${targetScope} scope`
+            );
           }
 
           return {
@@ -2363,7 +2873,12 @@ function createServer(): Server {
           const shouldAutoStore = autoStore ?? false;
 
           const stored: Array<{ id: string; type: string; confidence: number }> = [];
-          const candidates: Array<{ content: string; type: string; confidence: number; reason: string }> = [];
+          const candidates: Array<{
+            content: string;
+            type: string;
+            confidence: number;
+            reason: string;
+          }> = [];
 
           for (const candidate of result.candidates) {
             if (shouldAutoStore && candidate.confidence >= threshold) {
@@ -2410,9 +2925,10 @@ function createServer(): Server {
                   stored,
                   candidates,
                   stats: result.stats,
-                  message: stored.length > 0
-                    ? `Auto-stored ${stored.length} memories. ${candidates.length} candidates below threshold.`
-                    : `Found ${candidates.length} candidates. Use autoStore: true to store automatically.`,
+                  message:
+                    stored.length > 0
+                      ? `Auto-stored ${stored.length} memories. ${candidates.length} candidates below threshold.`
+                      : `Found ${candidates.length} candidates. Use autoStore: true to store automatically.`,
                 }),
               },
             ],
@@ -2444,7 +2960,7 @@ function createServer(): Server {
           let query = task;
           if (files && files.length > 0) {
             // Extract file names for targeted recall
-            const fileNames = files.map(f => f.split('/').pop()).join(' ');
+            const fileNames = files.map((f) => f.split('/').pop()).join(' ');
             query = `${task} ${fileNames}`;
           }
 
@@ -2488,7 +3004,10 @@ function createServer(): Server {
                 limit: Math.ceil(limit / 3),
                 minConfidence: 0.3,
               };
-              const globalResponse = await globalServices.hybridSearch.search(query, globalSearchOptions);
+              const globalResponse = await globalServices.hybridSearch.search(
+                query,
+                globalSearchOptions
+              );
 
               for (const result of globalResponse.memories) {
                 memories.push({
@@ -2510,15 +3029,16 @@ function createServer(): Server {
           const preTokenMemories = memories.slice(0, limit);
 
           // V12: Apply token budget - fit memories within budget
-          const { items: topMemories, truncatedContents, totalTokens, itemsIncluded } = fitItemsToTokenBudget(
-            preTokenMemories,
-            budget,
-            {
-              headerTokens: 100, // Reserve for section headers
-              itemOverhead: 10, // Bullets, newlines per item
-              minItemTokens: 30, // Minimum useful memory size
-            }
-          );
+          const {
+            items: topMemories,
+            truncatedContents,
+            totalTokens,
+            itemsIncluded,
+          } = fitItemsToTokenBudget(preTokenMemories, budget, {
+            headerTokens: 100, // Reserve for section headers
+            itemOverhead: 10, // Bullets, newlines per item
+            minItemTokens: 30, // Minimum useful memory size
+          });
 
           // Track truncation stats
           const truncatedCount = truncatedContents.size;
@@ -2526,7 +3046,7 @@ function createServer(): Server {
           // Check for contradictions among top memories
           if (memoryGraphService && topMemories.length > 1) {
             const allContradictions = memoryGraphService.findContradictions(projectId);
-            const topIds = new Set(topMemories.map(m => m.id));
+            const topIds = new Set(topMemories.map((m) => m.id));
 
             for (const c of allContradictions) {
               if (topIds.has(c.source.id) || topIds.has(c.target.id)) {
@@ -2622,9 +3142,10 @@ function createServer(): Server {
                     memoriesTruncated: truncatedCount,
                     memoriesExcluded: preTokenMemories.length - itemsIncluded,
                   },
-                  message: topMemories.length > 0
-                    ? `Assembled context from ${topMemories.length} memories (~${contextTokens} tokens).${truncatedCount > 0 ? ` ${truncatedCount} truncated to fit budget.` : ''}${contradictions.length > 0 ? ` Warning: ${contradictions.length} potential contradiction(s).` : ''}`
-                    : 'No relevant memories found for this task.',
+                  message:
+                    topMemories.length > 0
+                      ? `Assembled context from ${topMemories.length} memories (~${contextTokens} tokens).${truncatedCount > 0 ? ` ${truncatedCount} truncated to fit budget.` : ''}${contradictions.length > 0 ? ` Warning: ${contradictions.length} potential contradiction(s).` : ''}`
+                      : 'No relevant memories found for this task.',
                 }),
               },
             ],
@@ -2647,7 +3168,8 @@ function createServer(): Server {
           const consolidationOptions: ConsolidationOptions = {
             dryRun: dryRun ?? false,
           };
-          if (duplicateThreshold !== undefined) consolidationOptions.duplicateThreshold = duplicateThreshold;
+          if (duplicateThreshold !== undefined)
+            consolidationOptions.duplicateThreshold = duplicateThreshold;
           if (decayAfterDays !== undefined) consolidationOptions.decayAfterDays = decayAfterDays;
           if (decayRate !== undefined) consolidationOptions.decayRate = decayRate;
 
@@ -2740,7 +3262,7 @@ function createServer(): Server {
 
           if (isDryRun) {
             const needsUpdate = memories.filter(
-              m => !m.embedding || m.embedding_model !== currentModel
+              (m) => !m.embedding || m.embedding_model !== currentModel
             );
             return {
               content: [
@@ -2794,6 +3316,360 @@ function createServer(): Server {
                   updated,
                   errors,
                   model: currentModel,
+                }),
+              },
+            ],
+          };
+        }
+
+        // V9: Fact Store — structured, cited facts for anti-hallucination research
+        case 'fact_store': {
+          const input = FactStoreInputSchema.parse(args);
+
+          // Determine scope
+          const isGlobal = input.scope === MemoryScope.GLOBAL;
+          const targetProjectId = isGlobal ? GLOBAL_PROJECT_ID : projectId;
+          const targetRepo = isGlobal
+            ? (await initializeGlobalScope()).memoryRepository
+            : memoryRepository;
+          const targetEmbedding = isGlobal
+            ? (await initializeGlobalScope()).embeddingService
+            : embeddingService;
+
+          // Build content that includes claim + quote for good embedding quality
+          const content = `FACT: ${input.claim}\nSOURCE: ${input.sourceTitle} (${input.sourceUrl})\nQUOTE: "${input.directQuote}"`;
+
+          // Security: Check for credentials
+          if (!HARDENING_DISABLED && containsCredentials(content)) {
+            return {
+              content: [{ type: 'text', text: 'Error: Content appears to contain credentials.' }],
+              isError: true,
+            };
+          }
+
+          // Quota check
+          if (
+            !HARDENING_DISABLED &&
+            targetRepo.getMemoryCount(targetProjectId) >= MAX_MEMORIES_PER_PROJECT
+          ) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `Error: Storage limit reached (${MAX_MEMORIES_PER_PROJECT}).`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          // Generate embedding from claim text (not the full content — claim is what we search on)
+          const embedding = await targetEmbedding.embed(input.claim);
+
+          // Check for duplicate claims
+          if (targetRepo.isDuplicateContent(content, targetProjectId)) {
+            return {
+              content: [{ type: 'text', text: 'Fact already exists (duplicate content)' }],
+            };
+          }
+
+          // Create base memory
+          const memoryInput: MemoryCreateInput = {
+            content,
+            type: MemoryType.FACT,
+            confidence: input.confidence,
+            projectId: targetProjectId,
+            citation: input.sourceUrl,
+          };
+
+          // Contradiction detection
+          let contradictionWarning: {
+            count: number;
+            memories: Array<{ id: string; similarity: number; reason: string }>;
+          } | null = null;
+
+          if (contradictionDetector && embedding && !HARDENING_DISABLED && !isGlobal) {
+            const contradictions = await contradictionDetector.detectOnStore(
+              input.claim,
+              embedding,
+              targetProjectId
+            );
+            if (contradictions.length > 0) {
+              contradictionWarning = {
+                count: contradictions.length,
+                memories: contradictions.slice(0, 3).map((c) => ({
+                  id: c.memoryId,
+                  similarity: Math.round(c.similarity * 100) / 100,
+                  reason: c.reason,
+                })),
+              };
+            }
+          }
+
+          const memory = targetRepo.createMemory(
+            memoryInput,
+            embedding,
+            isGlobal ? undefined : projectRoot
+          );
+
+          // Update with V9 fact-specific fields
+          const now = Math.floor(Date.now() / 1000);
+          const db = connectionPool.get(isGlobal ? GLOBAL_PROJECT_ID : projectId);
+
+          if (db) {
+            db.instance
+              .prepare(
+                `
+              UPDATE memories SET
+                source_url = ?,
+                source_title = ?,
+                source_type = ?,
+                direct_quote = ?,
+                domain_tags = ?,
+                stale_after_days = ?,
+                last_verified = ?,
+                extracted_by = ?
+              WHERE id = ?
+            `
+              )
+              .run(
+                input.sourceUrl,
+                input.sourceTitle,
+                input.sourceType,
+                input.directQuote,
+                JSON.stringify(input.domainTags),
+                input.staleAfterDays ?? null,
+                now,
+                input.extractedBy,
+                memory.id
+              );
+          }
+
+          // Auto-link to find corroborating/contradicting facts
+          let autoLinkResult: {
+            created: number;
+            links: Array<{ targetId: string; linkType: string; strength: number }>;
+            suggestions: Array<{ targetId: string; similarity: number; reason: string }>;
+          } | null = null;
+
+          if (autoLinker && embedding && !HARDENING_DISABLED && !isGlobal) {
+            const linkResult = await autoLinker.processNewMemory(
+              memory.id,
+              input.claim,
+              embedding,
+              targetProjectId
+            );
+            if (linkResult.createdLinks.length > 0 || linkResult.suggestedLinks.length > 0) {
+              autoLinkResult = {
+                created: linkResult.createdLinks.length,
+                links: linkResult.createdLinks.map((l) => ({
+                  targetId: l.targetId,
+                  linkType: l.linkType,
+                  strength: l.strength,
+                })),
+                suggestions: linkResult.suggestedLinks.slice(0, 3).map((s) => ({
+                  targetId: s.targetId,
+                  similarity: s.similarity,
+                  reason: s.reason,
+                })),
+              };
+            }
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  id: memory.id,
+                  type: 'fact',
+                  claim: input.claim,
+                  sourceUrl: input.sourceUrl,
+                  sourceTitle: input.sourceTitle,
+                  sourceType: input.sourceType,
+                  confidence: input.confidence,
+                  domainTags: input.domainTags,
+                  hasEmbedding: !!embedding,
+                  contradictionWarning,
+                  autoLinks: autoLinkResult,
+                }),
+              },
+            ],
+          };
+        }
+
+        case 'fact_query': {
+          const input = FactQueryInputSchema.parse(args);
+
+          // Determine search scope
+          const searchProjectId = input.scope === 'global' ? GLOBAL_PROJECT_ID : projectId;
+
+          // Use hybrid search to find relevant facts
+          const searchOptions: SearchOptions = {
+            projectId: searchProjectId,
+            type: MemoryType.FACT,
+            limit: (input.limit ?? 10) * 2, // Over-fetch to allow post-filtering
+            minConfidence: input.minConfidence,
+            includeStale: input.includeStale,
+          };
+
+          const results = await hybridSearch.search(input.query, searchOptions);
+
+          // If scope is 'both', also search global
+          let globalResults: typeof results = {
+            memories: [],
+            searchStats: { vectorMatches: 0, bm25Matches: 0, fusedResults: 0, latencyMs: 0 },
+          };
+          if (input.scope === 'both' || input.scope === undefined) {
+            const globalScope = await initializeGlobalScope();
+            const globalOptions: SearchOptions = {
+              ...searchOptions,
+              projectId: GLOBAL_PROJECT_ID,
+            };
+            globalResults = await globalScope.hybridSearch.search(input.query, globalOptions);
+          }
+
+          // Merge results
+          const allResults = [...results.memories, ...globalResults.memories];
+
+          // Post-filter by V9 fields
+          const now = Math.floor(Date.now() / 1000);
+          const filtered = allResults.filter((r) => {
+            const m = r.memory;
+
+            // Must have source_url (be a structured fact, not a legacy memory)
+            // Read the V9 fields from the raw row since Memory interface may not have them yet
+            const db =
+              connectionPool.get(m.projectId === GLOBAL_PROJECT_ID ? '_global' : m.projectId) ??
+              connectionPool.get(projectId);
+            if (!db) return true; // Can't filter, include it
+
+            const row = db.instance
+              .prepare(
+                'SELECT source_url, source_type, domain_tags, stale_after_days, last_verified FROM memories WHERE id = ?'
+              )
+              .get(m.id) as
+              | {
+                  source_url: string | null;
+                  source_type: string | null;
+                  domain_tags: string | null;
+                  stale_after_days: number | null;
+                  last_verified: number | null;
+                }
+              | undefined;
+
+            if (!row?.source_url) return false; // Not a structured fact
+
+            // Filter by source type
+            if (input.sourceType && row.source_type !== input.sourceType) return false;
+
+            // Filter by domain tags (AND logic — fact must have ALL requested tags)
+            if (input.domainTags && input.domainTags.length > 0 && row.domain_tags) {
+              const factTags: string[] = JSON.parse(row.domain_tags);
+              if (!input.domainTags.every((t) => factTags.includes(t))) return false;
+            } else if (input.domainTags && input.domainTags.length > 0) {
+              return false; // No domain tags on fact, but filter requested
+            }
+
+            // Filter stale facts
+            if (!input.includeStale && row.stale_after_days && row.last_verified) {
+              const staleCutoff = row.last_verified + row.stale_after_days * 86400;
+              if (now > staleCutoff) return false;
+            }
+
+            return true;
+          });
+
+          // Limit results
+          const limited = filtered.slice(0, input.limit ?? 10);
+
+          // Enrich with V9 fields and contradictions
+          const enriched = limited.map((r) => {
+            const db =
+              connectionPool.get(
+                r.memory.projectId === GLOBAL_PROJECT_ID ? '_global' : r.memory.projectId
+              ) ?? connectionPool.get(projectId);
+
+            let factFields: {
+              sourceUrl: string | null;
+              sourceTitle: string | null;
+              sourceType: string | null;
+              directQuote: string | null;
+              domainTags: string[];
+              staleAfterDays: number | null;
+              lastVerified: number | null;
+              extractedBy: string | null;
+            } = {
+              sourceUrl: null,
+              sourceTitle: null,
+              sourceType: null,
+              directQuote: null,
+              domainTags: [],
+              staleAfterDays: null,
+              lastVerified: null,
+              extractedBy: null,
+            };
+
+            if (db) {
+              const row = db.instance
+                .prepare(
+                  'SELECT source_url, source_title, source_type, direct_quote, domain_tags, stale_after_days, last_verified, extracted_by FROM memories WHERE id = ?'
+                )
+                .get(r.memory.id) as Record<string, unknown> | undefined;
+
+              if (row) {
+                factFields = {
+                  sourceUrl: row.source_url as string | null,
+                  sourceTitle: row.source_title as string | null,
+                  sourceType: row.source_type as string | null,
+                  directQuote: row.direct_quote as string | null,
+                  domainTags: row.domain_tags ? JSON.parse(row.domain_tags as string) : [],
+                  staleAfterDays: row.stale_after_days as number | null,
+                  lastVerified: row.last_verified as number | null,
+                  extractedBy: row.extracted_by as string | null,
+                };
+              }
+            }
+
+            // Get contradicting/supporting links
+            let links: Array<{ targetId: string; linkType: string; strength: number }> = [];
+            if (memoryLinkRepository && input.includeContradictions !== false) {
+              const memLinks: MemoryLink[] = memoryLinkRepository.findLinks(r.memory.id);
+              links = memLinks
+                .filter(
+                  (l: MemoryLink) =>
+                    l.linkType === MemoryLinkType.CONTRADICTS ||
+                    l.linkType === MemoryLinkType.SUPPORTS
+                )
+                .map((l: MemoryLink) => ({
+                  targetId: l.sourceId === r.memory.id ? l.targetId : l.sourceId,
+                  linkType: l.linkType,
+                  strength: l.strength,
+                }));
+            }
+
+            return {
+              id: r.memory.id,
+              claim: r.memory.content,
+              relevance: r.relevance,
+              confidence: r.memory.confidence,
+              ...factFields,
+              relationships: links,
+            };
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  facts: enriched,
+                  searchStats: {
+                    totalFound: allResults.length,
+                    afterFiltering: filtered.length,
+                    returned: enriched.length,
+                    latencyMs: results.searchStats.latencyMs + globalResults.searchStats.latencyMs,
+                  },
                 }),
               },
             ],

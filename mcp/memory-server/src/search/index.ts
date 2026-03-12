@@ -1,5 +1,11 @@
 import type { DatabaseConnection } from '../storage/database.js';
-import type { Memory, MemoryType, MemorySearchResult, SearchResponse, SearchOptions } from '../types.js';
+import type {
+  Memory,
+  MemoryType,
+  MemorySearchResult,
+  SearchResponse,
+  SearchOptions,
+} from '../types.js';
 import type { EmbeddingService } from '../embeddings/index.js';
 import { VectorSearch } from './vector.js';
 import { BM25Search } from './bm25.js';
@@ -83,7 +89,7 @@ export class HybridSearch {
         k: this.config.rrfK ?? 60,
         vectorWeight: this.config.vectorWeight ?? 0.35,
         bm25Weight: this.config.bm25Weight ?? 0.35,
-        linkWeight: this.config.linkWeight ?? 0.30,
+        linkWeight: this.config.linkWeight ?? 0.3,
         limit,
       });
     } else if (vectorResults.length === 0) {
@@ -172,10 +178,7 @@ export class HybridSearch {
   /**
    * BM25 keyword search
    */
-  private bm25SearchMemories(
-    query: string,
-    options: SearchOptions
-  ): MemorySearchResult[] {
+  private bm25SearchMemories(query: string, options: SearchOptions): MemorySearchResult[] {
     const bm25Options: { limit?: number; type?: MemoryType; minConfidence?: number } = {
       limit: (options.limit ?? 10) * 2,
     };
@@ -221,7 +224,8 @@ export class HybridSearch {
 
         // Apply filters
         if (options.type && memory.type !== options.type) continue;
-        if (options.minConfidence !== undefined && memory.confidence < options.minConfidence) continue;
+        if (options.minConfidence !== undefined && memory.confidence < options.minConfidence)
+          continue;
         if (!options.includeSuperseded && memory.supersededBy) continue;
         if (!options.includeStale && memory.flaggedAt) continue;
         if (options.language && memory.language !== options.language) continue;
@@ -273,6 +277,16 @@ export class HybridSearch {
       goalPriority: row.goal_priority ?? null,
       parentGoalId: row.parent_goal_id ?? null,
       checkpointData: row.checkpoint_data ? JSON.parse(row.checkpoint_data) : null,
+      // V9 fields (fact store)
+      sourceUrl: row.source_url ?? null,
+      sourceTitle: row.source_title ?? null,
+      sourceType: (row.source_type as Memory['sourceType']) ?? null,
+      directQuote: row.direct_quote ?? null,
+      domainTags: row.domain_tags ? JSON.parse(row.domain_tags) : null,
+      staleAfterDays: row.stale_after_days ?? null,
+      lastVerified: row.last_verified ? new Date(row.last_verified * 1000) : null,
+      usedIn: row.used_in ? JSON.parse(row.used_in) : null,
+      extractedBy: row.extracted_by ?? null,
     };
   }
 }
@@ -306,4 +320,14 @@ interface MemoryRow {
   goal_priority?: number | null;
   parent_goal_id?: string | null;
   checkpoint_data?: string | null;
+  // V9 columns
+  source_url?: string | null;
+  source_title?: string | null;
+  source_type?: string | null;
+  direct_quote?: string | null;
+  domain_tags?: string | null;
+  stale_after_days?: number | null;
+  last_verified?: number | null;
+  used_in?: string | null;
+  extracted_by?: string | null;
 }

@@ -144,6 +144,16 @@ export class BM25Search {
       goalPriority: row.goal_priority ?? null,
       parentGoalId: row.parent_goal_id ?? null,
       checkpointData: row.checkpoint_data ? JSON.parse(row.checkpoint_data) : null,
+      // V9 fields (fact store)
+      sourceUrl: row.source_url ?? null,
+      sourceTitle: row.source_title ?? null,
+      sourceType: (row.source_type as Memory['sourceType']) ?? null,
+      directQuote: row.direct_quote ?? null,
+      domainTags: row.domain_tags ? JSON.parse(row.domain_tags) : null,
+      staleAfterDays: row.stale_after_days ?? null,
+      lastVerified: row.last_verified ? new Date(row.last_verified * 1000) : null,
+      usedIn: row.used_in ? JSON.parse(row.used_in) : null,
+      extractedBy: row.extracted_by ?? null,
     };
   }
 }
@@ -177,4 +187,14 @@ interface MemoryRow {
   goal_priority?: number | null;
   parent_goal_id?: string | null;
   checkpoint_data?: string | null;
+  // V9 columns
+  source_url?: string | null;
+  source_title?: string | null;
+  source_type?: string | null;
+  direct_quote?: string | null;
+  domain_tags?: string | null;
+  stale_after_days?: number | null;
+  last_verified?: number | null;
+  used_in?: string | null;
+  extracted_by?: string | null;
 }

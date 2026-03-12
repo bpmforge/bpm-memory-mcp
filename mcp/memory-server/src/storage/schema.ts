@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 8;
+export const CURRENT_VERSION = 9;
 
 /**
  * Initial schema - Version 1
@@ -344,6 +344,37 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
       DROP INDEX IF EXISTS idx_mel_entity;
       DROP INDEX IF EXISTS idx_mel_memory;
       DROP TABLE IF EXISTS memory_entity_links;
+    `,
+  },
+  // V9: Fact Store — Structured facts with citations for anti-hallucination research pipeline
+  {
+    version: 9,
+    up: `
+      -- Source metadata for research-backed facts
+      ALTER TABLE memories ADD COLUMN source_url TEXT;
+      ALTER TABLE memories ADD COLUMN source_title TEXT;
+      ALTER TABLE memories ADD COLUMN source_type TEXT CHECK (
+        source_type IS NULL OR source_type IN (
+          'official_docs', 'engineering_blog', 'academic', 'news', 'forum', 'unknown'
+        )
+      );
+      ALTER TABLE memories ADD COLUMN direct_quote TEXT;
+      ALTER TABLE memories ADD COLUMN domain_tags TEXT;  -- JSON array of strings
+      ALTER TABLE memories ADD COLUMN stale_after_days INTEGER;
+      ALTER TABLE memories ADD COLUMN last_verified INTEGER;
+      ALTER TABLE memories ADD COLUMN used_in TEXT;  -- JSON array of report/synthesis IDs
+      ALTER TABLE memories ADD COLUMN extracted_by TEXT;  -- agent that extracted this fact
+
+      -- Indexes for fact queries
+      CREATE INDEX IF NOT EXISTS idx_memories_source_url ON memories(source_url);
+      CREATE INDEX IF NOT EXISTS idx_memories_source_type ON memories(project_id, source_type);
+      CREATE INDEX IF NOT EXISTS idx_memories_stale ON memories(project_id, stale_after_days, last_verified);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_stale;
+      DROP INDEX IF EXISTS idx_memories_source_type;
+      DROP INDEX IF EXISTS idx_memories_source_url;
+      -- Note: SQLite doesn't support DROP COLUMN directly
     `,
   },
 ];
