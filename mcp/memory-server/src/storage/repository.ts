@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import type { DatabaseConnection } from './database.js';
+import { cosineSimilarity } from '../search/vector.js';
 import type {
   Memory,
   MemoryCreateInput,
@@ -227,6 +228,42 @@ export class MemoryRepository {
       .all(projectId) as MemoryRow[];
 
     return rows.map((row) => this.rowToMemory(row));
+  }
+
+  /**
+   * Find semantically similar memories above a cosine-similarity threshold.
+   * Used for near-duplicate detection on store.
+   */
+  findSemanticallySimilar(
+    embedding: Float32Array,
+    projectId: string,
+    threshold: number = 0.88,
+    limit: number = 5
+  ): Array<{ memory: Memory; similarity: number }> {
+    const candidates = this.findWithEmbeddings(projectId);
+    const scored = candidates
+      .map((memory) => ({
+        memory,
+        similarity: memory.embedding ? cosineSimilarity(embedding, memory.embedding) : 0,
+      }))
+      .filter(({ similarity }) => similarity >= threshold)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+    return scored;
+  }
+
+  /**
+   * Set a memory's confidence to an absolute value.
+   * Used to soft-deprecate near-duplicate memories when a newer version arrives.
+   */
+  setConfidence(id: string, projectId: string, confidence: number): boolean {
+    const clamped = Math.max(0.1, Math.min(1.0, confidence));
+    const result = this.db.instance
+      .prepare(
+        `UPDATE memories SET confidence = ? WHERE id = ? AND project_id = ? AND deleted_at IS NULL`
+      )
+      .run(clamped, id, projectId);
+    return result.changes > 0;
   }
 
   /**

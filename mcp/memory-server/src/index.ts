@@ -987,11 +987,28 @@ function createServer(): Server {
 
           const embedding = await targetEmbedding.embed(input.content);
 
-          // Check for duplicate
+          // Check for exact duplicate
           if (targetRepo.isDuplicateContent(input.content, targetProjectId)) {
             return {
               content: [{ type: 'text', text: 'Memory already exists (duplicate content)' }],
             };
+          }
+
+          // Semantic near-duplicate detection: soft-deprecate similar existing memories
+          // so the newest version of a fact always wins in recall ranking.
+          // Only applies to fact/preference/pattern types where the value changes over time.
+          const semanticDedupTypes = ['fact', 'preference', 'pattern'];
+          if (semanticDedupTypes.includes(input.type) && embedding) {
+            const similar = targetRepo.findSemanticallySimilar(
+              embedding,
+              targetProjectId,
+              0.88, // cosine threshold — high enough to avoid false positives
+              5
+            );
+            for (const { memory } of similar) {
+              // Reduce confidence of older near-duplicate so new one ranks higher
+              targetRepo.setConfidence(memory.id, targetProjectId, 0.2);
+            }
           }
 
           // Build memory input, only including defined optional properties

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { rerankResults, filterByRecency, filterByConfidence, boostByType, diversifyResults } from '../../mcp/memory-server/src/search/rerank.js';
+import {
+  rerankResults,
+  filterByRecency,
+  filterByConfidence,
+  boostByType,
+  diversifyResults,
+} from '../../mcp/memory-server/src/search/rerank.js';
 import type { Memory, MemorySearchResult, MemoryType } from '../../mcp/memory-server/src/types.js';
 
 function createMockMemory(
@@ -9,6 +15,7 @@ function createMockMemory(
     confidence?: number;
     accessCount?: number;
     accessedAt?: Date;
+    createdAt?: Date;
   } = {}
 ): Memory {
   return {
@@ -20,7 +27,7 @@ function createMockMemory(
     citation: null,
     projectId: 'test-project',
     contentHash: `hash-${id}`,
-    createdAt: new Date(),
+    createdAt: options.createdAt ?? new Date(),
     accessedAt: options.accessedAt ?? new Date(),
     accessCount: options.accessCount ?? 0,
     deletedAt: null,
@@ -53,25 +60,30 @@ describe('Re-ranking', () => {
       expect(reranked[0]!.memory.id).toBe('recent-error');
     });
 
-    it('should apply minimal decay to fact memories', () => {
+    it('should prefer recent facts over older ones of equal type', () => {
       const now = new Date();
       const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
+      // recent-fact: lower base relevance but stored just now → gets freshness burst
       const recentFact = createResult(
-        createMockMemory('recent-fact', { type: 'fact', accessedAt: now }),
+        createMockMemory('recent-fact', { type: 'fact', accessedAt: now, createdAt: now }),
         0.6
       );
+      // old-fact: higher base relevance but month-old createdAt → no freshness burst
       const oldFact = createResult(
-        createMockMemory('old-fact', { type: 'fact', accessedAt: oneMonthAgo }),
+        createMockMemory('old-fact', {
+          type: 'fact',
+          accessedAt: oneMonthAgo,
+          createdAt: oneMonthAgo,
+        }),
         0.9
       );
 
-      // Use low recency weight to let base score dominate for facts
       const reranked = rerankResults([recentFact, oldFact], { recencyWeight: 0.1, now });
 
-      // Old fact with higher base relevance should still rank higher
-      // because facts have minimal recency decay (0.9 factor)
-      expect(reranked[0]!.memory.id).toBe('old-fact');
+      // Recent fact wins: freshness burst (+0.4) overcomes the base-relevance gap.
+      // This is the desired behaviour — newly stored facts always surface above stale ones.
+      expect(reranked[0]!.memory.id).toBe('recent-fact');
     });
 
     it('should apply moderate decay to decision memories', () => {
@@ -117,7 +129,11 @@ describe('Re-ranking', () => {
       ];
 
       // Zero confidence weight means base relevance dominates
-      const reranked = rerankResults(results, { confidenceWeight: 0, recencyWeight: 0, accessWeight: 0 });
+      const reranked = rerankResults(results, {
+        confidenceWeight: 0,
+        recencyWeight: 0,
+        accessWeight: 0,
+      });
 
       // Original order by relevance preserved
       expect(reranked[0]!.memory.id).toBe('low-conf');
@@ -125,16 +141,29 @@ describe('Re-ranking', () => {
   });
 
   describe('Access frequency boosting', () => {
-    it('should boost frequently accessed memories', () => {
+    it('should boost frequently accessed memories (non-fresh)', () => {
+      // Use old createdAt so freshness burst does not apply to either memory,
+      // letting access frequency be the deciding factor.
+      const old = new Date('2024-01-01');
       const results = [
-        createResult(createMockMemory('rarely-accessed', { accessCount: 1 }), 0.8),
-        createResult(createMockMemory('frequently-accessed', { accessCount: 500 }), 0.75),
+        createResult(
+          createMockMemory('rarely-accessed', { accessCount: 1, createdAt: old, accessedAt: old }),
+          0.8
+        ),
+        createResult(
+          createMockMemory('frequently-accessed', {
+            accessCount: 500,
+            createdAt: old,
+            accessedAt: old,
+          }),
+          0.75
+        ),
       ];
 
       // High access weight should boost frequently accessed
       const reranked = rerankResults(results, { accessWeight: 0.4 });
 
-      // Frequently accessed should be boosted
+      // Frequently accessed should be boosted above the small base-relevance gap
       expect(reranked[0]!.memory.id).toBe('frequently-accessed');
     });
 
@@ -216,7 +245,11 @@ describe('Re-ranking', () => {
       const now = new Date();
       const veryOld = new Date('2020-01-01');
       const results = [
-        createResult(createMockMemory('ancient', { type: 'error', accessedAt: veryOld }), 0.9),
+        // createdAt also old so the freshness burst does not apply
+        createResult(
+          createMockMemory('ancient', { type: 'error', accessedAt: veryOld, createdAt: veryOld }),
+          0.9
+        ),
       ];
 
       const reranked = rerankResults(results, { recencyWeight: 0.3, now });
@@ -285,8 +318,8 @@ describe('Re-ranking', () => {
       const boosted = boostByType(results, ['error'], 2.0);
 
       // Error should now have higher relevance
-      expect(boosted.find(r => r.memory.id === 'error-mem')!.relevance).toBe(1.0);
-      expect(boosted.find(r => r.memory.id === 'fact-mem')!.relevance).toBe(0.8);
+      expect(boosted.find((r) => r.memory.id === 'error-mem')!.relevance).toBe(1.0);
+      expect(boosted.find((r) => r.memory.id === 'fact-mem')!.relevance).toBe(0.8);
     });
 
     it('should diversify results by type', () => {
@@ -301,7 +334,7 @@ describe('Re-ranking', () => {
       const diversified = diversifyResults(results, 2); // Max 2 per type
 
       expect(diversified.length).toBe(3); // 2 facts + 1 error
-      expect(diversified.filter(r => r.memory.type === 'fact').length).toBe(2);
+      expect(diversified.filter((r) => r.memory.type === 'fact').length).toBe(2);
     });
   });
 });

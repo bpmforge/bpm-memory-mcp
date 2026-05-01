@@ -27,7 +27,7 @@ const RECENCY_DECAY_FACTORS: Record<MemoryType, number> = {
   error: 0.1, // 10% relevance after ~30 days
   decision: 0.3, // 30% relevance after ~30 days
   pattern: 0.7, // 70% relevance after ~30 days
-  fact: 0.9, // 90% relevance after ~30 days (almost no decay)
+  fact: 0.6, // 60% relevance after ~30 days (facts can become stale)
   preference: 0.4, // 40% relevance after ~30 days
   goal: 0.3, // 30% relevance after ~30 days (goals can change)
   checkpoint: 0.05, // 5% relevance after ~30 days (checkpoints are very time-sensitive)
@@ -54,11 +54,12 @@ export function rerankResults(
     const memory = result.memory;
 
     // Calculate recency score with type-specific decay
-    const recencyScore = calculateRecencyScore(
-      memory.accessedAt,
-      memory.type,
-      now
-    );
+    const recencyScore = calculateRecencyScore(memory.accessedAt, memory.type, now);
+
+    // Freshness burst: memories stored in the last 5 minutes get a strong bonus.
+    // Prevents brand-new facts from losing to older ones with higher access counts.
+    const ageMs = now.getTime() - memory.createdAt.getTime();
+    const freshnessBurst = ageMs < 5 * 60 * 1000 ? 0.4 : 0;
 
     // Confidence boost (already 0-1)
     const confidenceScore = memory.confidence;
@@ -67,11 +68,14 @@ export function rerankResults(
     const accessScore = calculateAccessScore(memory.accessCount);
 
     // Combine scores
-    const finalScore =
+    const finalScore = Math.min(
+      1,
       baseWeight * result.relevance +
-      recencyWeight * recencyScore +
-      confidenceWeight * confidenceScore +
-      accessWeight * accessScore;
+        recencyWeight * recencyScore +
+        confidenceWeight * confidenceScore +
+        accessWeight * accessScore +
+        freshnessBurst
+    );
 
     return {
       ...result,
@@ -93,11 +97,7 @@ export function rerankResults(
 /**
  * Calculate recency score with type-specific decay
  */
-function calculateRecencyScore(
-  accessedAt: Date,
-  type: MemoryType,
-  now: Date
-): number {
+function calculateRecencyScore(accessedAt: Date, type: MemoryType, now: Date): number {
   const ageMs = now.getTime() - accessedAt.getTime();
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
 
@@ -194,9 +194,7 @@ export function boostByType(
 ): MemorySearchResult[] {
   return results.map((r) => ({
     ...r,
-    relevance: boostTypes.includes(r.memory.type)
-      ? r.relevance * boostFactor
-      : r.relevance,
+    relevance: boostTypes.includes(r.memory.type) ? r.relevance * boostFactor : r.relevance,
   }));
 }
 
@@ -240,12 +238,12 @@ export interface ConfidenceDecayOptions {
 }
 
 const DEFAULT_TYPE_MULTIPLIERS: Record<MemoryType, number> = {
-  fact: 4.0,       // Facts decay slowest (360 day half-life)
-  pattern: 3.0,    // Patterns persist (270 days)
-  decision: 1.5,   // Decisions moderate (135 days)
+  fact: 4.0, // Facts decay slowest (360 day half-life)
+  pattern: 3.0, // Patterns persist (270 days)
+  decision: 1.5, // Decisions moderate (135 days)
   preference: 1.0, // Preferences baseline (90 days)
-  error: 0.5,      // Errors decay faster (45 days)
-  goal: 0.3,       // Goals decay fast (27 days)
+  error: 0.5, // Errors decay faster (45 days)
+  goal: 0.3, // Goals decay fast (27 days)
   checkpoint: 0.1, // Checkpoints decay fastest (9 days)
 };
 
