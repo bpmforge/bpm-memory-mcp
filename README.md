@@ -43,7 +43,38 @@ session_save({ summary: "..." })                     # session end — persist w
 
 Hybrid search with Reciprocal Rank Fusion: **vector (35%) + BM25 (35%) + link traversal (30%)**.
 
-Vector search requires LM Studio running `text-embedding-nomic-embed-text-v1.5` on port 1234. **BM25 keyword search works without it** — set `EMBEDDING_PROVIDER=none` to skip the embedding check entirely.
+**BM25 keyword search works with no embedding setup at all.** Vector search is optional.
+
+### Embedding setup
+
+**Default: LM Studio (free, local)**
+1. Download [LM Studio](https://lmstudio.ai) and load `nomic-ai/nomic-embed-text-v1.5-GGUF`
+2. No config needed — defaults to `http://localhost:1234`
+
+**Alternative model:**
+```bash
+export LM_STUDIO_URL="http://localhost:1234"
+export LM_STUDIO_MODEL="CompendiumLabs/bge-large-en-v1.5-gguf"  # any model
+```
+
+**OpenAI embeddings:**
+```bash
+export LM_STUDIO_URL="https://api.openai.com/v1"
+export LM_STUDIO_MODEL="text-embedding-3-small"
+export OPENAI_API_KEY="sk-..."
+```
+
+**Remote LM Studio server:**
+```bash
+export LM_STUDIO_URL="http://192.168.1.x:1234"
+```
+
+**No embeddings (BM25 only):**
+```bash
+export EMBEDDING_PROVIDER=none
+```
+
+> **Provider-sticky:** Changing the embedding model requires re-embedding stored memories. Run `memory_reembed()` after switching models.
 
 ## Schema v9
 
