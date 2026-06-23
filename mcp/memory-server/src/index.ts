@@ -775,6 +775,11 @@ function createServer(): Server {
               maximum: 0.1,
               description: 'Confidence decay rate per day (default: 0.01)',
             },
+            persistSummaries: {
+              type: 'boolean',
+              description:
+                'If true, distill each identified cluster into a persisted semantic "pattern" memory (centroid embedding + derived_from provenance links to its sources). Episodic→semantic. Ignored when dryRun (default: false)',
+            },
             dryRun: {
               type: 'boolean',
               description:
@@ -3171,12 +3176,14 @@ function createServer(): Server {
 
         // V10: Memory consolidation
         case 'memory_consolidate': {
-          const { duplicateThreshold, decayAfterDays, decayRate, dryRun } = args as {
-            duplicateThreshold?: number;
-            decayAfterDays?: number;
-            decayRate?: number;
-            dryRun?: boolean;
-          };
+          const { duplicateThreshold, decayAfterDays, decayRate, persistSummaries, dryRun } =
+            args as {
+              duplicateThreshold?: number;
+              decayAfterDays?: number;
+              decayRate?: number;
+              persistSummaries?: boolean;
+              dryRun?: boolean;
+            };
 
           const db = connectionPool.get(projectId);
           const consolidationService = new ConsolidationService(db.instance);
@@ -3189,6 +3196,8 @@ function createServer(): Server {
             consolidationOptions.duplicateThreshold = duplicateThreshold;
           if (decayAfterDays !== undefined) consolidationOptions.decayAfterDays = decayAfterDays;
           if (decayRate !== undefined) consolidationOptions.decayRate = decayRate;
+          if (persistSummaries !== undefined)
+            consolidationOptions.persistSummaries = persistSummaries;
 
           const result = await consolidationService.consolidate(projectId, consolidationOptions);
 
@@ -3205,6 +3214,9 @@ function createServer(): Server {
           }
           if (result.clusters.length > 0) {
             parts.push(`Found ${result.clusters.length} clusters to potentially summarize`);
+          }
+          if (result.summaries.length > 0) {
+            parts.push(`Persisted ${result.summaries.length} semantic summaries`);
           }
 
           const message = dryRun

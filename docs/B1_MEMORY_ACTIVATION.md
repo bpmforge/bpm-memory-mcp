@@ -27,10 +27,19 @@ bi-temporal" lever from the *bridging-the-frontier-gap* research book in
   - Added `tests/unit/consolidation.test.ts` (11 tests): regression guard
     (runs against real schema), duplicate merge + dryRun, type-multiplier decay
     + floor + review-flag, cluster identification. 286 suite total, green.
-- **Slice 2 — episodic→semantic persistence (NEXT)**: have consolidation
-  *persist* a cluster summary as a `pattern`/`fact` semantic memory, linked to
-  its episodic sources (provenance via existing `memory_links`), behind a
-  `persistSummaries` option. Tests alongside.
+- **Slice 1b — decay unit bug `[DONE]`**: `applyConfidenceDecay` compared
+  `Date.now()` (ms) against `accessed_at` (seconds) → every real memory read as
+  ~19,676 days old and decayed to the floor on the first run. Fixed to compare
+  in seconds; added a regression test (real-timestamp memory stays fresh).
+- **Slice 2 — episodic→semantic persistence `[DONE]`**: `persistSummaries`
+  option distills each cluster into a persisted `pattern` memory with a
+  **centroid embedding** (mean of members' vectors → recallable near them) and
+  a `derived_from` provenance link to every source. Deterministic content +
+  `isDuplicateContent` guard = idempotent; summaries are stamped
+  `consolidation:summary` and excluded from future active sets (no
+  summaries-of-summaries). Exposed via the `memory_consolidate` tool
+  (`persistSummaries`) and CLI (`--persist-summaries`). 5 new tests (16 in the
+  consolidation suite; 291 total green).
 - **Slice 3 — sleep-time trigger**: run consolidation autonomously at a natural
   "sleep" boundary (on `session_save`), throttled (≤1×/project/interval) and
   flag-gated, emitting a report. Default conservative thresholds.

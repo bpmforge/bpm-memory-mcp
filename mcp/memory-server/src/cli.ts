@@ -20,7 +20,13 @@ import { parseArgs } from 'node:util';
 import { existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { connectionPool, runMigrations, getProjectId, GLOBAL_PROJECT_ID, listAllProjects } from './storage/index.js';
+import {
+  connectionPool,
+  runMigrations,
+  getProjectId,
+  GLOBAL_PROJECT_ID,
+  listAllProjects,
+} from './storage/index.js';
 import { MemoryRepository } from './storage/repository.js';
 import { EmbeddingService } from './embeddings/index.js';
 import { HybridSearch } from './search/index.js';
@@ -118,7 +124,7 @@ ${colors.bold}Commands:${colors.reset}
   export      Export to JSON (--project <path>, --output <file>)
   import      Import from JSON (--project <path>, --input <file>)
   stats       Show statistics (--project <path>)
-  consolidate Run consolidation (--project <path>, --dry-run)
+  consolidate Run consolidation (--project <path>, --dry-run, --persist-summaries)
   projects    List all projects with memory databases
 
 ${colors.bold}Options:${colors.reset}
@@ -131,6 +137,7 @@ ${colors.bold}Options:${colors.reset}
   --output <file>   Output file for export
   --input <file>    Input file for import
   --dry-run         Preview changes without applying
+  --persist-summaries  Persist cluster summaries as semantic memories (episodic→semantic)
 
 ${colors.bold}Examples:${colors.reset}
   memory-cli list --limit 10
@@ -154,6 +161,7 @@ function parseOptions(args: string[]) {
       output: { type: 'string', short: 'o' },
       input: { type: 'string', short: 'i' },
       'dry-run': { type: 'boolean' },
+      'persist-summaries': { type: 'boolean' },
     },
     allowPositionals: true,
   });
@@ -222,9 +230,13 @@ async function listMemories(args: string[]) {
     };
     const typeColor = typeColors[row.type] ?? colors.reset;
 
-    log(`${colors.dim}${row.id.substring(0, 8)}${colors.reset} ${typeColor}[${row.type}]${colors.reset} ${date}`);
+    log(
+      `${colors.dim}${row.id.substring(0, 8)}${colors.reset} ${typeColor}[${row.type}]${colors.reset} ${date}`
+    );
     log(`  ${row.content.substring(0, 100)}${row.content.length > 100 ? '...' : ''}`);
-    log(`  ${colors.dim}confidence: ${row.confidence}, accessed: ${row.access_count}x${colors.reset}\n`);
+    log(
+      `  ${colors.dim}confidence: ${row.confidence}, accessed: ${row.access_count}x${colors.reset}\n`
+    );
   }
 
   log(`${colors.dim}Showing ${rows.length} memories${colors.reset}`);
@@ -278,11 +290,15 @@ async function searchMemories(args: string[]) {
       preference: colors.cyan,
     };
 
-    log(`${colors.dim}${m.id.substring(0, 8)}${colors.reset} ${typeColor[m.type] ?? colors.reset}[${m.type}]${colors.reset} ${colors.green}${relevance}% match${colors.reset}`);
+    log(
+      `${colors.dim}${m.id.substring(0, 8)}${colors.reset} ${typeColor[m.type] ?? colors.reset}[${m.type}]${colors.reset} ${colors.green}${relevance}% match${colors.reset}`
+    );
     log(`  ${m.content.substring(0, 120)}${m.content.length > 120 ? '...' : ''}\n`);
   }
 
-  log(`${colors.dim}Found ${response.memories.length} memories (${response.searchStats.latencyMs}ms)${colors.reset}`);
+  log(
+    `${colors.dim}Found ${response.memories.length} memories (${response.searchStats.latencyMs}ms)${colors.reset}`
+  );
 }
 
 async function deleteMemory(args: string[]) {
@@ -322,12 +338,16 @@ async function exportMemories(args: string[]) {
 
   heading(`Exporting memories from: ${projectId.substring(0, 8)}...`);
 
-  const rows = db.instance.prepare(`
+  const rows = db.instance
+    .prepare(
+      `
     SELECT id, content, type, confidence, citation, language, created_at, version
     FROM memories
     WHERE project_id = ? AND deleted_at IS NULL AND superseded_by IS NULL
     ORDER BY created_at DESC
-  `).all(projectId) as Array<{
+  `
+    )
+    .all(projectId) as Array<{
     id: string;
     content: string;
     type: string;
@@ -342,7 +362,7 @@ async function exportMemories(args: string[]) {
     exportedAt: new Date().toISOString(),
     projectId,
     memoryCount: rows.length,
-    memories: rows.map(r => ({
+    memories: rows.map((r) => ({
       id: r.id,
       content: r.content,
       type: r.type,
@@ -442,26 +462,42 @@ async function showStats(args: string[]) {
 
   heading(`Statistics for: ${projectId.substring(0, 8)}...`);
 
-  const totalRow = db.instance.prepare(`
+  const totalRow = db.instance
+    .prepare(
+      `
     SELECT COUNT(*) as total FROM memories
     WHERE project_id = ? AND deleted_at IS NULL AND superseded_by IS NULL
-  `).get(projectId) as { total: number };
+  `
+    )
+    .get(projectId) as { total: number };
 
-  const byTypeRows = db.instance.prepare(`
+  const byTypeRows = db.instance
+    .prepare(
+      `
     SELECT type, COUNT(*) as count FROM memories
     WHERE project_id = ? AND deleted_at IS NULL AND superseded_by IS NULL
     GROUP BY type ORDER BY count DESC
-  `).all(projectId) as Array<{ type: string; count: number }>;
+  `
+    )
+    .all(projectId) as Array<{ type: string; count: number }>;
 
-  const deletedRow = db.instance.prepare(`
+  const deletedRow = db.instance
+    .prepare(
+      `
     SELECT COUNT(*) as total FROM memories
     WHERE project_id = ? AND deleted_at IS NOT NULL
-  `).get(projectId) as { total: number };
+  `
+    )
+    .get(projectId) as { total: number };
 
-  const supersededRow = db.instance.prepare(`
+  const supersededRow = db.instance
+    .prepare(
+      `
     SELECT COUNT(*) as total FROM memories
     WHERE project_id = ? AND superseded_by IS NOT NULL
-  `).get(projectId) as { total: number };
+  `
+    )
+    .get(projectId) as { total: number };
 
   log(`${colors.bold}Total memories:${colors.reset} ${totalRow.total}`);
   log('');
@@ -470,13 +506,16 @@ async function showStats(args: string[]) {
     log(`  ${row.type}: ${row.count}`);
   }
   log('');
-  log(`${colors.dim}Deleted: ${deletedRow.total}, Superseded: ${supersededRow.total}${colors.reset}`);
+  log(
+    `${colors.dim}Deleted: ${deletedRow.total}, Superseded: ${supersededRow.total}${colors.reset}`
+  );
 }
 
 async function runConsolidate(args: string[]) {
   const options = parseOptions(args);
   const projectId = getProjectIdFromOptions(options);
   const dryRun = options['dry-run'] ?? false;
+  const persistSummaries = options['persist-summaries'] ?? false;
 
   const db = connectionPool.get(projectId);
   runMigrations(db);
@@ -485,7 +524,7 @@ async function runConsolidate(args: string[]) {
 
   heading(`${dryRun ? '[DRY RUN] ' : ''}Consolidating: ${projectId.substring(0, 8)}...`);
 
-  const result = await consolidator.consolidate(projectId, { dryRun });
+  const result = await consolidator.consolidate(projectId, { dryRun, persistSummaries });
 
   if (result.merged.length > 0) {
     log(`${colors.yellow}Duplicate groups merged:${colors.reset} ${result.merged.length}`);
@@ -502,8 +541,16 @@ async function runConsolidate(args: string[]) {
   if (result.clusters.length > 0) {
     log(`${colors.green}Clusters found:${colors.reset} ${result.clusters.length}`);
   }
+  if (result.summaries.length > 0) {
+    log(`${colors.green}Semantic summaries persisted:${colors.reset} ${result.summaries.length}`);
+  }
 
-  if (result.merged.length === 0 && result.decayed.length === 0 && result.flaggedForReview.length === 0) {
+  if (
+    result.merged.length === 0 &&
+    result.decayed.length === 0 &&
+    result.flaggedForReview.length === 0 &&
+    result.summaries.length === 0
+  ) {
     success('Memory is healthy - no consolidation needed');
   } else if (dryRun) {
     log(`\n${colors.dim}Run without --dry-run to apply changes${colors.reset}`);
@@ -526,10 +573,14 @@ async function listProjects() {
   for (const projectId of projects) {
     const db = connectionPool.get(projectId);
 
-    const countRow = db.instance.prepare(`
+    const countRow = db.instance
+      .prepare(
+        `
       SELECT COUNT(*) as total FROM memories
       WHERE project_id = ? AND deleted_at IS NULL AND superseded_by IS NULL
-    `).get(projectId) as { total: number };
+    `
+      )
+      .get(projectId) as { total: number };
 
     const isGlobal = projectId === GLOBAL_PROJECT_ID;
     const label = isGlobal ? `${colors.cyan}[GLOBAL]${colors.reset}` : projectId.substring(0, 16);
@@ -541,7 +592,7 @@ async function listProjects() {
 }
 
 // Run CLI
-main().catch(err => {
+main().catch((err) => {
   error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });

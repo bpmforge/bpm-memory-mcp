@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { ConsolidationService } from '../../mcp/memory-server/src/consolidation/index.js';
+import {
+  ConsolidationService,
+  SUMMARY_CITATION,
+} from '../../mcp/memory-server/src/consolidation/index.js';
 import { MemoryRepository } from '../../mcp/memory-server/src/storage/repository.js';
 import { MIGRATIONS } from '../../mcp/memory-server/src/storage/schema.js';
 
@@ -201,6 +204,82 @@ describe('ConsolidationService', () => {
         minClusterSize: 3,
       });
       expect(result.stats.clustersIdentified).toBe(0);
+    });
+  });
+
+  // --- Episodic→semantic persistence (slice 2) -------------------------------
+  describe('persistSummaries', () => {
+    const seedCluster = () => {
+      seed('seedling nursery tracker alpha', { type: 'pattern', embedding: vec([1, 0]) });
+      seed('seedling nursery tracker beta', { type: 'pattern', embedding: vec([1, 0]) });
+      seed('seedling nursery tracker gamma', { type: 'pattern', embedding: vec([1, 0]) });
+    };
+    const summaryRows = (): any[] =>
+      db.instance
+        .prepare('SELECT * FROM memories WHERE project_id = ? AND citation = ?')
+        .all(PROJECT, SUMMARY_CITATION);
+    const linksFrom = (id: string): any[] =>
+      db.instance
+        .prepare("SELECT * FROM memory_links WHERE source_id = ? AND link_type = 'derived_from'")
+        .all(id);
+
+    it('persists a semantic memory with a centroid embedding + provenance links', async () => {
+      seedCluster();
+      const result = await service.consolidate(PROJECT, {
+        duplicateThreshold: 2,
+        minClusterSize: 3,
+        persistSummaries: true,
+      });
+
+      expect(result.stats.summariesPersisted).toBe(1);
+      const s = result.summaries[0]!;
+      expect(s.linkCount).toBe(3);
+      expect(s.sourceIds).toHaveLength(3);
+
+      const rows = summaryRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(s.id);
+      expect(rows[0].type).toBe('pattern');
+      expect(rows[0].content).toContain('[consolidated]');
+      expect(rows[0].embedding).not.toBeNull(); // centroid stored
+
+      const links = linksFrom(s.id);
+      expect(links).toHaveLength(3);
+      expect(new Set(links.map((l) => l.target_id))).toEqual(new Set(s.sourceIds));
+      expect(links.every((l) => l.created_by === 'system')).toBe(true);
+    });
+
+    it('does nothing when persistSummaries is false', async () => {
+      seedCluster();
+      const result = await service.consolidate(PROJECT, {
+        duplicateThreshold: 2,
+        minClusterSize: 3,
+      });
+      expect(result.stats.summariesPersisted).toBe(0);
+      expect(summaryRows()).toHaveLength(0);
+    });
+
+    it('dryRun never persists even with persistSummaries', async () => {
+      seedCluster();
+      const result = await service.consolidate(PROJECT, {
+        duplicateThreshold: 2,
+        minClusterSize: 3,
+        persistSummaries: true,
+        dryRun: true,
+      });
+      expect(result.summaries).toHaveLength(0);
+      expect(summaryRows()).toHaveLength(0);
+    });
+
+    it('is idempotent — re-running does not duplicate the summary', async () => {
+      seedCluster();
+      const opts = { duplicateThreshold: 2, minClusterSize: 3, persistSummaries: true };
+      const first = await service.consolidate(PROJECT, opts);
+      const second = await service.consolidate(PROJECT, opts);
+
+      expect(first.stats.summariesPersisted).toBe(1);
+      expect(second.stats.summariesPersisted).toBe(0); // deduped by content_hash
+      expect(summaryRows()).toHaveLength(1); // and the summary is not re-consolidated
     });
   });
 });

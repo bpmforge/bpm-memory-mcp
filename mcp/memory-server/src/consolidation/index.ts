@@ -10,6 +10,14 @@
 
 import type Database from 'better-sqlite3';
 import { MemoryType } from '../types.js';
+import type { DatabaseConnection } from '../storage/database.js';
+import type { MemoryLinkType } from '../types.js';
+import { MemoryRepository } from '../storage/repository.js';
+import { MemoryLinkRepository } from '../storage/links.js';
+
+/** Citation marker stamped on consolidation-generated semantic summaries so they
+ *  are excluded from future consolidation passes (no summaries-of-summaries). */
+export const SUMMARY_CITATION = 'consolidation:summary';
 
 export interface ConsolidationResult {
   merged: Array<{
@@ -32,11 +40,20 @@ export interface ConsolidationResult {
     memoryIds: string[];
     suggestedSummary: string;
   }>;
+  /** Semantic memories distilled from clusters (episodic→semantic), with
+   *  provenance links back to their sources. Empty unless persistSummaries. */
+  summaries: Array<{
+    id: string;
+    theme: string;
+    sourceIds: string[];
+    linkCount: number;
+  }>;
   stats: {
     totalProcessed: number;
     duplicatesFound: number;
     memoriesDecayed: number;
     clustersIdentified: number;
+    summariesPersisted: number;
     processingTimeMs: number;
   };
 }
@@ -52,6 +69,10 @@ export interface ConsolidationOptions {
   minConfidenceThreshold?: number;
   /** Minimum cluster size to suggest summarization (default: 3) */
   minClusterSize?: number;
+  /** Persist each identified cluster as a semantic `pattern` memory with a
+   *  centroid embedding + `derived_from` links to its episodic sources
+   *  (episodic→semantic distillation). Ignored when dryRun. (default: false) */
+  persistSummaries?: boolean;
   /** Whether to actually apply changes or just report (default: false) */
   dryRun?: boolean;
 }
@@ -72,9 +93,19 @@ interface MemoryRecord {
  */
 export class ConsolidationService {
   private db: Database.Database;
+  private memoryRepo: MemoryRepository;
+  private linkRepo: MemoryLinkRepository;
 
   constructor(db: Database.Database) {
     this.db = db;
+    // The repos only use .instance and .transaction; wrap the raw handle so we
+    // can reuse FTS-aware createMemory + link creation without a refactor.
+    const conn = {
+      instance: db,
+      transaction: <T>(fn: () => T): T => db.transaction(fn)(),
+    } as unknown as DatabaseConnection;
+    this.memoryRepo = new MemoryRepository(conn);
+    this.linkRepo = new MemoryLinkRepository(conn);
   }
 
   /**
@@ -92,6 +123,7 @@ export class ConsolidationService {
     const decayRate = options.decayRate ?? 0.01;
     const minConfidenceThreshold = options.minConfidenceThreshold ?? 0.3;
     const minClusterSize = options.minClusterSize ?? 3;
+    const persistSummaries = options.persistSummaries ?? false;
     const dryRun = options.dryRun ?? false;
 
     const result: ConsolidationResult = {
@@ -99,11 +131,13 @@ export class ConsolidationService {
       decayed: [],
       flaggedForReview: [],
       clusters: [],
+      summaries: [],
       stats: {
         totalProcessed: 0,
         duplicatesFound: 0,
         memoriesDecayed: 0,
         clustersIdentified: 0,
+        summariesPersisted: 0,
         processingTimeMs: 0,
       },
     };
@@ -149,6 +183,12 @@ export class ConsolidationService {
     result.clusters = clusters;
     result.stats.clustersIdentified = clusters.length;
 
+    // 4. Optionally distill each cluster into a persisted semantic memory
+    if (persistSummaries && !dryRun) {
+      result.summaries = this.persistClusterSummaries(clusters, memories, projectId);
+      result.stats.summariesPersisted = result.summaries.length;
+    }
+
     result.stats.processingTimeMs = Date.now() - startTime;
     return result;
   }
@@ -167,6 +207,7 @@ export class ConsolidationService {
       WHERE project_id = ?
         AND deleted_at IS NULL
         AND superseded_by IS NULL
+        AND (citation IS NULL OR citation != '${SUMMARY_CITATION}')
       ORDER BY created_at DESC
     `);
 
@@ -427,5 +468,96 @@ export class ConsolidationService {
     }
 
     return clusters;
+  }
+
+  /**
+   * Distill each cluster into a persisted semantic `pattern` memory:
+   * episodic→semantic. The summary carries a centroid embedding (mean of its
+   * members' vectors, so it is recallable near them) and a `derived_from` link
+   * to every source memory (provenance). Content is deterministic so repeat
+   * runs dedupe by content_hash instead of spawning duplicates. Summaries are
+   * stamped with SUMMARY_CITATION and excluded from future active sets, so they
+   * are never re-consolidated into summaries-of-summaries.
+   */
+  private persistClusterSummaries(
+    clusters: Array<{ theme: string; memoryIds: string[]; suggestedSummary: string }>,
+    memories: MemoryRecord[],
+    projectId: string
+  ): ConsolidationResult['summaries'] {
+    const byId = new Map(memories.map((m) => [m.id, m]));
+    const summaries: ConsolidationResult['summaries'] = [];
+
+    for (const cluster of clusters) {
+      const sortedIds = [...cluster.memoryIds].sort();
+      const members = sortedIds
+        .map((id) => byId.get(id))
+        .filter((m): m is MemoryRecord => m != null);
+      if (members.length === 0) continue;
+
+      const bullets = members
+        .map((m) => `- ${m.content.replace(/\s+/g, ' ').trim().slice(0, 140)}`)
+        .join('\n');
+      const content = `[consolidated] ${cluster.theme} (${members.length} memories)\n${bullets}`;
+
+      // Idempotency: identical summary already present → skip (no duplicate).
+      if (this.memoryRepo.isDuplicateContent(content, projectId)) continue;
+
+      const avgConfidence = members.reduce((s, m) => s + (m.confidence ?? 1), 0) / members.length;
+      const centroid = this.centroidEmbedding(members);
+
+      const summary = this.memoryRepo.createMemory(
+        {
+          content,
+          type: MemoryType.PATTERN,
+          confidence: avgConfidence,
+          projectId,
+          citation: SUMMARY_CITATION,
+        },
+        centroid
+      );
+
+      let linkCount = 0;
+      for (const m of members) {
+        this.linkRepo.createLink({
+          sourceId: summary.id,
+          targetId: m.id,
+          linkType: 'derived_from' as MemoryLinkType,
+          strength: 1.0,
+          createdBy: 'system',
+        });
+        linkCount++;
+      }
+
+      summaries.push({
+        id: summary.id,
+        theme: cluster.theme,
+        sourceIds: cluster.memoryIds,
+        linkCount,
+      });
+    }
+
+    return summaries;
+  }
+
+  /**
+   * Mean of the members' embedding vectors (centroid), or null if none have one.
+   */
+  private centroidEmbedding(members: MemoryRecord[]): Float32Array | null {
+    const vecs = members
+      .filter((m) => m.embedding)
+      .map((m) => {
+        const b = m.embedding as Buffer;
+        return new Float32Array(b.buffer, b.byteOffset, b.length / 4);
+      });
+    if (vecs.length === 0) return null;
+
+    const dim = vecs[0]!.length;
+    const out = new Float32Array(dim);
+    for (const v of vecs) {
+      if (v.length !== dim) continue;
+      for (let i = 0; i < dim; i++) out[i] = (out[i] ?? 0) + (v[i] ?? 0);
+    }
+    for (let i = 0; i < dim; i++) out[i] = (out[i] ?? 0) / vecs.length;
+    return out;
   }
 }
