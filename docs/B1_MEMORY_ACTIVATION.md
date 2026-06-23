@@ -55,9 +55,24 @@ bi-temporal" lever from the *bridging-the-frontier-gap* research book in
   head then walks the full supersession history (newest-first), project scope
   with global fallback. Test documents the resolve-from-old-id contract.
   299 total green.
-- **Slice 5 — gated contradiction auto-resolve**: execute high-confidence
-  `suggestedAction` (auto-link `contradicts`; supersede on value-conflict) with
-  a conservative default + opt-out.
+- **Slice 5 — contradiction auto-resolve `[DONE, scope corrected by Rule 9]`**:
+  the map's "auto-resolution MISSING" was wrong. The `autoLinker` (run on every
+  store) **already auto-creates `contradicts` links** when two highly-similar
+  memories diverge on a negation pattern (`auto-linker.ts:224-228`,
+  `createdBy:'system'`). Building the planned slice would have **reinvented**
+  working code. The real gap was *coverage*: that path had no test. Added a
+  regression test that a `contradicts` link is auto-created on a negation-
+  divergent high-similarity pair. **Deliberate boundary (also asserted):**
+  auto-resolution *links*, it does NOT auto-supersede/delete — deciding which
+  fact wins is destructive and stays advisory (the `ContradictionDetector`'s
+  `update` suggestedAction surfaces it for a human). 300 total green.
+
+## Status: B1 memory-activation slices 1–5 complete
+
+The "activate, don't rebuild" thesis held: of the five slices, **two were real
+bugs** (consolidation was DOA + over-decaying), **two activated dormant code**
+(persist summaries, expose history), and **one was already built** (contradiction
+linking) — its gap was only a missing test. No graph was rebuilt.
 
 ## Notes
 - `npm run lint` is broken repo-wide (missing `typescript-eslint` dep in

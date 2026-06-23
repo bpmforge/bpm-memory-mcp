@@ -109,11 +109,7 @@ describe('AutoLinker', () => {
   /**
    * Helper to insert a test memory
    */
-  function insertMemory(
-    content: string,
-    embedding: Float32Array,
-    type: string = 'fact'
-  ): string {
+  function insertMemory(content: string, embedding: Float32Array, type: string = 'fact'): string {
     const id = randomUUID();
     const now = Math.floor(Date.now() / 1000);
     const embeddingBuffer = Buffer.from(embedding.buffer);
@@ -164,6 +160,37 @@ describe('AutoLinker', () => {
       expect(result.createdLinks.length).toBeGreaterThanOrEqual(1);
       expect(result.createdLinks[0]?.targetId).toBe(existingId);
       expect(result.createdLinks[0]?.linkType).toBe('relates_to');
+    });
+
+    it('auto-creates a contradicts link when negation diverges (B1 slice 5)', async () => {
+      // The contradiction "auto-resolve" path: when two highly-similar memories
+      // disagree (one negates), the autoLinker records a `contradicts` link
+      // automatically. This locks in that previously-untested behavior.
+      const base = createMockEmbedding(7);
+      const existingId = insertMemory('always use connection pooling for the database', base);
+
+      const similar = createSimilarEmbedding(base, 0.1); // high similarity
+      const newId = insertMemory('do not use connection pooling for the database', similar);
+
+      const result = await autoLinker.processNewMemory(
+        newId,
+        'do not use connection pooling for the database',
+        similar,
+        PROJECT_ID
+      );
+
+      const contradicts = result.createdLinks.find((l) => l.linkType === 'contradicts');
+      expect(contradicts).toBeDefined();
+      expect(contradicts!.targetId).toBe(existingId);
+      expect(contradicts!.createdBy).toBe('system');
+
+      // Boundary: auto-resolution links, it does NOT auto-supersede/delete —
+      // deciding which fact wins is destructive and stays advisory by design.
+      const existing = db.instance
+        .prepare('SELECT superseded_by, deleted_at FROM memories WHERE id = ?')
+        .get(existingId) as { superseded_by: string | null; deleted_at: number | null };
+      expect(existing.superseded_by).toBeNull();
+      expect(existing.deleted_at).toBeNull();
     });
 
     it('should suggest links for moderately similar memories', async () => {
