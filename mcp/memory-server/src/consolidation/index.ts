@@ -160,7 +160,7 @@ export class ConsolidationService {
     const stmt = this.db.prepare(`
       SELECT
         id, content, type, confidence, embedding,
-        last_accessed_at as lastAccessedAt,
+        accessed_at as lastAccessedAt,
         created_at as createdAt,
         access_count as accessCount
       FROM memories
@@ -208,8 +208,8 @@ export class ConsolidationService {
         // Keep the one with higher confidence
         const allIds = [mem1.id, ...similar];
         const sortedByConfidence = allIds
-          .map(id => {
-            const mem = memories.find(m => m.id === id);
+          .map((id) => {
+            const mem = memories.find((m) => m.id === id);
             return { id, confidence: mem?.confidence ?? 0 };
           })
           .sort((a, b) => b.confidence - a.confidence);
@@ -218,7 +218,7 @@ export class ConsolidationService {
         if (keepId) {
           duplicates.push({
             keepId,
-            mergeIds: sortedByConfidence.slice(1).map(s => s.id),
+            mergeIds: sortedByConfidence.slice(1).map((s) => s.id),
             similarity: maxSimilarity,
           });
         }
@@ -261,7 +261,7 @@ export class ConsolidationService {
     const now = Date.now();
     const stmt = this.db.prepare(`
       UPDATE memories
-      SET deleted_at = ?, delete_reason = ?
+      SET deleted_at = ?, deleted_reason = ?
       WHERE id = ? AND project_id = ?
     `);
 
@@ -291,7 +291,12 @@ export class ConsolidationService {
     decayed: Array<{ id: string; oldConfidence: number; newConfidence: number; reason: string }>;
     flagged: Array<{ id: string; reason: string }>;
   } {
-    const decayed: Array<{ id: string; oldConfidence: number; newConfidence: number; reason: string }> = [];
+    const decayed: Array<{
+      id: string;
+      oldConfidence: number;
+      newConfidence: number;
+      reason: string;
+    }> = [];
     const flagged: Array<{ id: string; reason: string }> = [];
 
     const now = Date.now();
@@ -299,10 +304,10 @@ export class ConsolidationService {
 
     // Type-specific decay multipliers (some types decay faster)
     const decayMultipliers: Record<string, number> = {
-      [MemoryType.ERROR]: 1.5,      // Errors decay faster (may become stale)
-      [MemoryType.FACT]: 0.8,       // Facts decay slower
-      [MemoryType.DECISION]: 1.0,   // Decisions decay normally
-      [MemoryType.PATTERN]: 0.7,    // Patterns are long-lived
+      [MemoryType.ERROR]: 1.5, // Errors decay faster (may become stale)
+      [MemoryType.FACT]: 0.8, // Facts decay slower
+      [MemoryType.DECISION]: 1.0, // Decisions decay normally
+      [MemoryType.PATTERN]: 0.7, // Patterns are long-lived
       [MemoryType.PREFERENCE]: 0.5, // Preferences are very stable
     };
 
@@ -393,8 +398,8 @@ export class ConsolidationService {
         if (cluster.length >= minSize) {
           // Extract common words for theme
           const words = cluster
-            .flatMap(m => m.content.toLowerCase().split(/\s+/))
-            .filter(w => w.length > 4);
+            .flatMap((m) => m.content.toLowerCase().split(/\s+/))
+            .filter((w) => w.length > 4);
           const wordCounts = new Map<string, number>();
           for (const w of words) {
             wordCounts.set(w, (wordCounts.get(w) ?? 0) + 1);
@@ -405,13 +410,12 @@ export class ConsolidationService {
             .slice(0, 3)
             .map(([word]) => word);
 
-          const theme = commonWords.length > 0
-            ? `${type}: ${commonWords.join(', ')}`
-            : `${type} cluster`;
+          const theme =
+            commonWords.length > 0 ? `${type}: ${commonWords.join(', ')}` : `${type} cluster`;
 
           clusters.push({
             theme,
-            memoryIds: cluster.map(m => m.id),
+            memoryIds: cluster.map((m) => m.id),
             suggestedSummary: `Consider summarizing ${cluster.length} ${type} memories about: ${commonWords.join(', ') || 'related topics'}`,
           });
         }
