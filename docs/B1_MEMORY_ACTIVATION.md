@@ -40,9 +40,15 @@ bi-temporal" lever from the *bridging-the-frontier-gap* research book in
   summaries-of-summaries). Exposed via the `memory_consolidate` tool
   (`persistSummaries`) and CLI (`--persist-summaries`). 5 new tests (16 in the
   consolidation suite; 291 total green).
-- **Slice 3 — sleep-time trigger**: run consolidation autonomously at a natural
-  "sleep" boundary (on `session_save`), throttled (≤1×/project/interval) and
-  flag-gated, emitting a report. Default conservative thresholds.
+- **Slice 3 — sleep-time trigger `[DONE]`**: `ConsolidationScheduler` runs
+  consolidation autonomously at the `session_save` boundary (the "going to
+  sleep" moment). **Opt-in** via `CLAUDE_MEMORY_SLEEP_CONSOLIDATION=true`
+  (default off), **throttled** to ≤1×/project/`CLAUDE_MEMORY_CONSOLIDATION_INTERVAL_HOURS`
+  (default 24h) via a new `consolidation_runs` table (migration v10, survives
+  restarts), runs with `persistSummaries`, and **never throws** — a failed
+  consolidation cannot break `session_save`. The save response reports what it
+  did. 7 tests (disabled / first-run+record / throttle / interval-elapsed /
+  empty-project no-throw / fromEnv flag+interval). 298 total green.
 - **Slice 4 — expose version history**: surface `getVersionChain()` as a lean
   read tool (`memory_history`) so supersession chains are inspectable.
 - **Slice 5 — gated contradiction auto-resolve**: execute high-confidence

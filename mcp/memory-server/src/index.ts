@@ -55,6 +55,7 @@ import { ContradictionDetector } from './validation/contradictions.js';
 import { AutoLinker } from './linking/index.js';
 import { extractMemories, detectCitation } from './extraction/index.js';
 import { ConsolidationService, type ConsolidationOptions } from './consolidation/index.js';
+import { ConsolidationScheduler } from './consolidation/scheduler.js';
 import {
   MemoryGraphService,
   KnowledgeGraphPopulator,
@@ -1601,6 +1602,24 @@ function createServer(): Server {
             }
           }
 
+          // Sleep-time consolidation: session_save is the natural "going to
+          // sleep" boundary. Opt-in + throttled; never allowed to break the save.
+          let sleepConsolidation: Awaited<ReturnType<ConsolidationScheduler['maybeRun']>> | null =
+            null;
+          try {
+            const consolidationDb = connectionPool.get(projectId);
+            sleepConsolidation = await ConsolidationScheduler.fromEnv(
+              consolidationDb.instance
+            ).maybeRun(projectId);
+          } catch {
+            // Consolidation must never block session_save.
+          }
+
+          const sleepNote =
+            sleepConsolidation?.ran === true
+              ? ` Consolidated memory (${sleepConsolidation.summariesPersisted ?? 0} summaries, ${sleepConsolidation.merged ?? 0} merged, ${sleepConsolidation.decayed ?? 0} decayed).`
+              : '';
+
           return {
             content: [
               {
@@ -1609,10 +1628,11 @@ function createServer(): Server {
                   sessionId,
                   summary,
                   extractedMemories,
+                  sleepConsolidation: sleepConsolidation ?? undefined,
                   message:
-                    extractedMemories.length > 0
+                    (extractedMemories.length > 0
                       ? `Session saved. Auto-extracted ${extractedMemories.length} memories.`
-                      : 'Session saved successfully',
+                      : 'Session saved successfully') + sleepNote,
                 }),
               },
             ],

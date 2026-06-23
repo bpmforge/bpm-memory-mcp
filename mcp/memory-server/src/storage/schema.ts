@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 9;
+export const CURRENT_VERSION = 10;
 
 /**
  * Initial schema - Version 1
@@ -375,6 +375,21 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
       DROP INDEX IF EXISTS idx_memories_source_type;
       DROP INDEX IF EXISTS idx_memories_source_url;
       -- Note: SQLite doesn't support DROP COLUMN directly
+    `,
+  },
+  // V10: Sleep-time consolidation throttle state — one row per project tracking
+  // the last autonomous consolidation run so it fires at most once per interval.
+  {
+    version: 10,
+    up: `
+      CREATE TABLE IF NOT EXISTS consolidation_runs (
+        project_id TEXT PRIMARY KEY,
+        last_run_at INTEGER NOT NULL,
+        last_summary_count INTEGER NOT NULL DEFAULT 0
+      );
+    `,
+    down: `
+      DROP TABLE IF EXISTS consolidation_runs;
     `,
   },
 ];
