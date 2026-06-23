@@ -443,6 +443,18 @@ function createServer(): Server {
         },
       },
       {
+        name: 'memory_history',
+        description:
+          'Get the version history (supersession chain) of a memory, newest first. Accepts any version id in the chain — it resolves to the latest version and walks back through superseded versions.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid', description: 'Any memory ID in the chain' },
+          },
+          required: ['id'],
+        },
+      },
+      {
         name: 'memory_update',
         description: 'Create a new version of a memory (supersedes the old version)',
         inputSchema: {
@@ -1352,6 +1364,60 @@ function createServer(): Server {
                 text: success
                   ? `Memory ${input.id} marked as deleted (${scope} scope)`
                   : `Memory ${input.id} not found or already deleted`,
+              },
+            ],
+          };
+        }
+
+        case 'memory_history': {
+          const { id } = args as { id: string };
+          if (!id) {
+            return {
+              content: [{ type: 'text', text: 'Error: id is required' }],
+              isError: true,
+            };
+          }
+
+          // Resolve any id in the chain to its head, then walk the full history.
+          const buildChain = (repo: MemoryRepository, pid: string) => {
+            const latest = repo.getLatestVersion(id, pid);
+            if (!latest) return null;
+            return repo.getVersionHistory(latest.id, pid);
+          };
+
+          let scope = 'project';
+          let chain = buildChain(memoryRepository, projectId);
+          if (!chain) {
+            try {
+              const globalServices = await initializeGlobalScope();
+              const globalChain = buildChain(globalServices.memoryRepository, GLOBAL_PROJECT_ID);
+              if (globalChain) {
+                chain = globalChain;
+                scope = 'global';
+              }
+            } catch {
+              // Global scope not available
+            }
+          }
+
+          if (!chain || chain.length === 0) {
+            return { content: [{ type: 'text', text: `Memory ${id} not found` }] };
+          }
+
+          const versions = chain.map((m) => ({
+            id: m.id,
+            version: m.version,
+            isLatest: m.supersededBy == null,
+            confidence: m.confidence,
+            content: m.content.length > 160 ? `${m.content.slice(0, 160)}…` : m.content,
+            createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : m.createdAt,
+          }));
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ id, scope, versionCount: versions.length, versions }),
               },
             ],
           };

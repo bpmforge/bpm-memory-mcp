@@ -49,8 +49,12 @@ bi-temporal" lever from the *bridging-the-frontier-gap* research book in
   consolidation cannot break `session_save`. The save response reports what it
   did. 7 tests (disabled / first-run+record / throttle / interval-elapsed /
   empty-project no-throw / fromEnv flag+interval). 298 total green.
-- **Slice 4 — expose version history**: surface `getVersionChain()` as a lean
-  read tool (`memory_history`) so supersession chains are inspectable.
+- **Slice 4 — expose version history `[DONE]`**: `getVersionHistory()` /
+  `getLatestVersion()` were implemented but unreachable (no tool). Added the
+  lean read tool `memory_history` — pass *any* id in a chain; it resolves to the
+  head then walks the full supersession history (newest-first), project scope
+  with global fallback. Test documents the resolve-from-old-id contract.
+  299 total green.
 - **Slice 5 — gated contradiction auto-resolve**: execute high-confidence
   `suggestedAction` (auto-link `contradicts`; supersede on value-conflict) with
   a conservative default + opt-out.

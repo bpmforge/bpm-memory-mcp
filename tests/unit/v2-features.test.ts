@@ -7,7 +7,11 @@ import { parseCodeContext } from '../../mcp/memory-server/src/language/context.j
 import { FeedbackType, SymbolType } from '../../mcp/memory-server/src/types.js';
 
 // Create a mock DatabaseConnection interface with all migrations applied
-function createTestDb(): { instance: Database.Database; close: () => void; transaction: <T>(fn: () => T) => T } {
+function createTestDb(): {
+  instance: Database.Database;
+  close: () => void;
+  transaction: <T>(fn: () => T) => T;
+} {
   const db = new Database(':memory:');
   for (const migration of MIGRATIONS) {
     db.exec(migration.up);
@@ -123,11 +127,7 @@ describe('V2 Features', () => {
         projectId: 'test-proj',
       });
 
-      const updated = repo.createSupersedingMemory(
-        original.id,
-        'test-proj',
-        'Updated content'
-      );
+      const updated = repo.createSupersedingMemory(original.id, 'test-proj', 'Updated content');
 
       expect(updated.version).toBe(2);
       expect(updated.supersedesId).toBe(original.id);
@@ -140,11 +140,7 @@ describe('V2 Features', () => {
         projectId: 'test-proj',
       });
 
-      const updated = repo.createSupersedingMemory(
-        original.id,
-        'test-proj',
-        'Updated content'
-      );
+      const updated = repo.createSupersedingMemory(original.id, 'test-proj', 'Updated content');
 
       const refreshed = repo.findById(original.id, 'test-proj');
       expect(refreshed!.supersededBy).toBe(updated.id);
@@ -181,6 +177,20 @@ describe('V2 Features', () => {
       const latestFromV1 = repo.getLatestVersion(v1.id, 'test-proj');
       expect(latestFromV1).not.toBeNull();
       expect(latestFromV1!.supersededBy).toBeNull();
+    });
+
+    it('resolves full history from any id in the chain (memory_history contract)', () => {
+      // Mirrors the memory_history tool: getVersionHistory anchors on the head,
+      // so the tool first resolves any id to its latest version.
+      const v1 = repo.createMemory({ content: 'Version 1', projectId: 'test-proj' });
+      const v2 = repo.createSupersedingMemory(v1.id, 'test-proj', 'Version 2');
+      repo.createSupersedingMemory(v2.id, 'test-proj', 'Version 3');
+
+      const head = repo.getLatestVersion(v1.id, 'test-proj'); // passed an OLD id
+      const history = repo.getVersionHistory(head!.id, 'test-proj');
+
+      expect(history.map((m) => m.content)).toEqual(['Version 3', 'Version 2', 'Version 1']);
+      expect(history[0]!.supersededBy).toBeNull(); // newest is the head
     });
   });
 
@@ -258,11 +268,7 @@ describe('V2 Features', () => {
         projectId: 'test-proj',
       });
 
-      const feedback = repo.recordFeedback(
-        memory.id,
-        'test-proj',
-        FeedbackType.HELPFUL
-      );
+      const feedback = repo.recordFeedback(memory.id, 'test-proj', FeedbackType.HELPFUL);
 
       expect(feedback.id).toBeDefined();
       expect(feedback.memoryId).toBe(memory.id);
