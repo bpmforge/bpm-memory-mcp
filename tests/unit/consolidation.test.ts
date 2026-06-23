@@ -20,7 +20,6 @@ function createTestDb(): {
 }
 
 const vec = (arr: number[]): Float32Array => Float32Array.from(arr);
-const DAY = 24 * 60 * 60 * 1000;
 
 describe('ConsolidationService', () => {
   let db: { instance: Database.Database; close: () => void; transaction: <T>(fn: () => T) => T };
@@ -55,9 +54,10 @@ describe('ConsolidationService', () => {
       opts.embedding ?? null
     );
     if (opts.accessedDaysAgo != null) {
+      // accessed_at is stored in SECONDS (matches repository.createMemory).
       db.instance
         .prepare('UPDATE memories SET accessed_at = ? WHERE id = ?')
-        .run(Date.now() - opts.accessedDaysAgo * DAY, m.id);
+        .run(Math.floor(Date.now() / 1000) - opts.accessedDaysAgo * 24 * 60 * 60, m.id);
     }
     return m.id;
   }
@@ -140,6 +140,16 @@ describe('ConsolidationService', () => {
     it('does not decay a recently-accessed memory', async () => {
       const id = seed('fresh', { confidence: 1.0, accessedDaysAgo: 1 });
       const result = await service.consolidate(PROJECT, { decayAfterDays: 30 });
+      expect(result.decayed.find((x) => x.id === id)).toBeUndefined();
+      expect(row(id).confidence).toBe(1.0);
+    });
+
+    it('treats a memory created with a real (seconds) timestamp as fresh', async () => {
+      // Regression for the seconds/ms unit bug: a just-created memory keeps the
+      // real accessed_at (seconds). Pre-fix it read as ms → ~19,676 days old →
+      // decayed to the floor. No accessedDaysAgo override here on purpose.
+      const id = seed('today', { confidence: 1.0 });
+      const result = await service.consolidate(PROJECT, { decayAfterDays: 1, decayRate: 0.5 });
       expect(result.decayed.find((x) => x.id === id)).toBeUndefined();
       expect(row(id).confidence).toBe(1.0);
     });

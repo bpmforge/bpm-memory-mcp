@@ -299,8 +299,12 @@ export class ConsolidationService {
     }> = [];
     const flagged: Array<{ id: string; reason: string }> = [];
 
-    const now = Date.now();
-    const msPerDay = 24 * 60 * 60 * 1000;
+    // `accessed_at` is stored in SECONDS (repository.createMemory /
+    // updateAccessStats; row.accessed_at * 1000 on read), so compare in seconds.
+    // Using Date.now() (ms) here treated every real memory as ~19,676 days old
+    // and decayed them all to the floor on the first run.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const secPerDay = 24 * 60 * 60;
 
     // Type-specific decay multipliers (some types decay faster)
     const decayMultipliers: Record<string, number> = {
@@ -312,7 +316,7 @@ export class ConsolidationService {
     };
 
     for (const mem of memories) {
-      const daysSinceAccess = (now - mem.lastAccessedAt) / msPerDay;
+      const daysSinceAccess = (nowSec - mem.lastAccessedAt) / secPerDay;
 
       if (daysSinceAccess > decayAfterDays) {
         const daysOverThreshold = daysSinceAccess - decayAfterDays;
