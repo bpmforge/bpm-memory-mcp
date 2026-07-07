@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 10;
+export const CURRENT_VERSION = 11;
 
 /**
  * Initial schema - Version 1
@@ -390,6 +390,36 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
     `,
     down: `
       DROP TABLE IF EXISTS consolidation_runs;
+    `,
+  },
+  // V11: Temporal validity + volatility-scaled staleness for memories (T11.1).
+  // entities/relations already carry valid_from/valid_to (V1) — this is the memories-
+  // table counterpart, plus a volatility class and a general verified_at recency signal
+  // that T11.2's recall scoring folds a staleness penalty from. Note: distinct from V9's
+  // last_verified, which is specific to fact-store source verification for research
+  // claims — verified_at here applies to every memory type, not just facts. Worth a
+  // steward look at whether the two should eventually consolidate.
+  {
+    version: 11,
+    up: `
+      ALTER TABLE memories ADD COLUMN valid_from INTEGER;
+      ALTER TABLE memories ADD COLUMN valid_to INTEGER;
+      ALTER TABLE memories ADD COLUMN volatility TEXT NOT NULL DEFAULT 'slow' CHECK (
+        volatility IN ('static', 'slow', 'volatile')
+      );
+      ALTER TABLE memories ADD COLUMN verified_at INTEGER;
+
+      -- Backfill valid_from for existing rows so the temporal pair is queryable
+      -- immediately, matching entities/relations' populated valid_from.
+      UPDATE memories SET valid_from = created_at WHERE valid_from IS NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_memories_temporal ON memories(project_id, valid_from, valid_to);
+      CREATE INDEX IF NOT EXISTS idx_memories_volatility ON memories(project_id, volatility, verified_at);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_volatility;
+      DROP INDEX IF EXISTS idx_memories_temporal;
+      -- Note: SQLite doesn't support DROP COLUMN directly
     `,
   },
 ];
