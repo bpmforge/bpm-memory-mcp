@@ -84,15 +84,19 @@ describe('V11 migration — memories temporal + volatility fields', () => {
     runMigrations(db);
 
     const row = db.instance
-      .prepare('SELECT created_at, valid_from, valid_to, verified_at FROM memories WHERE id = ?')
+      .prepare(
+        'SELECT created_at, valid_from, valid_to, verified_at, volatility FROM memories WHERE id = ?'
+      )
       .get(id) as {
       created_at: number;
       valid_from: number;
       valid_to: number | null;
       verified_at: number | null;
+      volatility: string;
     };
     expect(row.valid_from).toBe(row.created_at);
     expect(row.valid_to).toBeNull();
+    expect(row.volatility).toBe('slow'); // NOT NULL DEFAULT applies retroactively too
     expect(row.verified_at).toBeNull(); // never verified — not backfilled to a fake timestamp
   });
 
