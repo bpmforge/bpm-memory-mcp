@@ -10,11 +10,13 @@ import type { EmbeddingService } from '../embeddings/index.js';
 import { VectorSearch } from './vector.js';
 import { BM25Search } from './bm25.js';
 import { rrfFusion, rrfFusionWithLinks, interleave } from './rrf.js';
+import { applyVolatilityStaleness } from './volatility-staleness.js';
 import { MemoryLinkRepository } from '../storage/links.js';
 
 export { VectorSearch, cosineSimilarity, normalizeVector } from './vector.js';
 export { BM25Search } from './bm25.js';
 export { rrfFusion, rrfFusionWithLinks, interleave } from './rrf.js';
+export { volatilityMultiplier, applyVolatilityStaleness } from './volatility-staleness.js';
 export {
   rerankResults,
   rerankWithLinkDensity,
@@ -55,6 +57,10 @@ export class HybridSearch {
   async search(query: string, options: SearchOptions): Promise<SearchResponse> {
     const startTime = Date.now();
     const limit = options.limit ?? 10;
+    // T11.2: fuse/gather a wider candidate window than the final page so the
+    // volatility staleness penalty (applied below) can displace staled-out
+    // memories with fresher ones instead of merely burying them in-place.
+    const candidateLimit = limit * 3;
     const enableLinks = this.config.enableLinkSearch ?? true;
 
     // Run vector and BM25 searches in parallel
@@ -82,7 +88,7 @@ export class HybridSearch {
       fusedResults = [];
     } else if (vectorResults.length === 0 && bm25Results.length === 0 && linkResults.length > 0) {
       // Only link results available
-      fusedResults = linkResults.slice(0, limit);
+      fusedResults = linkResults.slice(0, candidateLimit);
     } else if (linkResults.length > 0) {
       // Full three-way fusion with links
       fusedResults = rrfFusionWithLinks(vectorResults, bm25Results, linkResults, {
@@ -90,23 +96,27 @@ export class HybridSearch {
         vectorWeight: this.config.vectorWeight ?? 0.35,
         bm25Weight: this.config.bm25Weight ?? 0.35,
         linkWeight: this.config.linkWeight ?? 0.3,
-        limit,
+        limit: candidateLimit,
       });
     } else if (vectorResults.length === 0) {
       // Vector search unavailable - use BM25 only
-      fusedResults = bm25Results.slice(0, limit);
+      fusedResults = bm25Results.slice(0, candidateLimit);
     } else if (bm25Results.length === 0) {
       // BM25 returned nothing - use vector only
-      fusedResults = vectorResults.slice(0, limit);
+      fusedResults = vectorResults.slice(0, candidateLimit);
     } else {
       // Two-way hybrid search (no link results)
       fusedResults = rrfFusion(vectorResults, bm25Results, {
         k: this.config.rrfK ?? 60,
         vectorWeight: this.config.vectorWeight ?? 0.5,
         bm25Weight: this.config.bm25Weight ?? 0.5,
-        limit,
+        limit: candidateLimit,
       });
     }
+
+    // T11.2: fold the volatility-scaled staleness penalty into the final
+    // score, then truncate to the page the caller actually asked for.
+    fusedResults = applyVolatilityStaleness(fusedResults).slice(0, limit);
 
     const latencyMs = Date.now() - startTime;
 
@@ -287,6 +297,9 @@ export class HybridSearch {
       lastVerified: row.last_verified ? new Date(row.last_verified * 1000) : null,
       usedIn: row.used_in ? JSON.parse(row.used_in) : null,
       extractedBy: row.extracted_by ?? null,
+      // V11 fields
+      volatility: (row.volatility as Memory['volatility']) ?? 'slow',
+      verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
     };
   }
 }
@@ -330,4 +343,7 @@ interface MemoryRow {
   last_verified?: number | null;
   used_in?: string | null;
   extracted_by?: string | null;
+  // V11 columns
+  volatility?: string | null;
+  verified_at?: number | null;
 }

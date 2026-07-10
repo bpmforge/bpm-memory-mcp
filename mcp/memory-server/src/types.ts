@@ -70,6 +70,11 @@ export enum MemoryScope {
   GLOBAL = 'global',
 }
 
+// V11: how quickly a memory's content can go stale. Drives the recall-time
+// staleness penalty (T11.2) — 'static' facts never decay, 'volatile' facts
+// decay to ~0 within days of going unverified.
+export type Volatility = 'static' | 'slow' | 'volatile';
+
 export enum SymbolType {
   FUNCTION = 'function',
   CLASS = 'class',
@@ -217,6 +222,13 @@ export interface Memory {
   lastVerified: Date | null;
   usedIn: string[] | null;
   extractedBy: string | null;
+  // V11 fields (trust & freshness — T11.1 schema, T11.2 recall scoring).
+  // verifiedAt is a general per-memory-type "last confirmed accurate" signal
+  // consumed by volatility-scaled recall scoring. Distinct from the V9
+  // lastVerified field above, which is fact-store-specific (source
+  // re-verification for research claims only) — see T11.3-note.
+  volatility: Volatility;
+  verifiedAt: Date | null;
 }
 
 export interface MemoryFeedback {
