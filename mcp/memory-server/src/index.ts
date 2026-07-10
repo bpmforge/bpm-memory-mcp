@@ -1423,13 +1423,25 @@ function createServer(): Server {
         }
 
         case 'memory_history': {
-          const { id } = args as { id: string };
+          const { id, readerAgentId, readerTeamId } = args as {
+            id: string;
+            readerAgentId?: string;
+            readerTeamId?: string;
+          };
           if (!id) {
             return {
               content: [{ type: 'text', text: 'Error: id is required' }],
               isError: true,
             };
           }
+
+          // V13: fleet-scope reader identity (T11.4), enforced below —
+          // same per-item canReadMemory pattern as memory_link's
+          // find_related.
+          const historyReader: ReaderContext = {
+            agentId: readerAgentId ?? envAgentId,
+            teamId: readerTeamId ?? envTeamId,
+          };
 
           // Resolve any id in the chain to its head, then walk the full history.
           const buildChain = (repo: MemoryRepository, pid: string) => {
@@ -1457,7 +1469,16 @@ function createServer(): Server {
             return { content: [{ type: 'text', text: `Memory ${id} not found` }] };
           }
 
-          const versions = chain.map((m) => ({
+          // V13: filter each version by fleet-scope readability — a caller
+          // unauthorized to read the memory must not see any version's
+          // content, and must get the same not-found shape as a truly
+          // missing id (no existence leak).
+          const readableChain = chain.filter((m) => canReadMemory(m, historyReader));
+          if (readableChain.length === 0) {
+            return { content: [{ type: 'text', text: `Memory ${id} not found` }] };
+          }
+
+          const versions = readableChain.map((m) => ({
             id: m.id,
             version: m.version,
             isLatest: m.supersededBy == null,
@@ -1479,10 +1500,19 @@ function createServer(): Server {
         case 'memory_update': {
           const input = MemoryUpdateInputSchema.parse(args);
 
+          // V13: fleet-scope reader identity (T11.4) — a caller must be
+          // able to read the memory it's superseding, otherwise
+          // memory_update could rewrite a restricted/team memory's
+          // content without ever passing an enforced read path.
+          const updateReader: ReaderContext = {
+            agentId: input.readerAgentId ?? envAgentId,
+            teamId: input.readerTeamId ?? envTeamId,
+          };
+
           // Try project scope first
           const projectMemory = memoryRepository.findById(input.id, projectId);
 
-          if (projectMemory) {
+          if (projectMemory && canReadMemory(projectMemory, updateReader)) {
             const embedding = await embeddingService.embed(input.content);
             const newMemory = memoryRepository.createSupersedingMemory(
               input.id,
@@ -1510,43 +1540,47 @@ function createServer(): Server {
             };
           }
 
-          // Try global scope
-          try {
-            const globalServices = await initializeGlobalScope();
-            const globalMemory = globalServices.memoryRepository.findById(
-              input.id,
-              GLOBAL_PROJECT_ID
-            );
-
-            if (globalMemory) {
-              const embedding = await globalServices.embeddingService.embed(input.content);
-              const newMemory = globalServices.memoryRepository.createSupersedingMemory(
+          // Try global scope (only when the id wasn't found in project
+          // scope at all — an unreadable project-scope hit must not fall
+          // through to a global lookup).
+          if (!projectMemory) {
+            try {
+              const globalServices = await initializeGlobalScope();
+              const globalMemory = globalServices.memoryRepository.findById(
                 input.id,
-                GLOBAL_PROJECT_ID,
-                input.content,
-                embedding,
-                input.language,
-                undefined // No project root for global
+                GLOBAL_PROJECT_ID
               );
 
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify({
-                      id: newMemory.id,
-                      version: newMemory.version,
-                      supersedesId: newMemory.supersedesId,
-                      language: newMemory.language,
-                      scope: 'global',
-                      message: `Memory updated to version ${newMemory.version}`,
-                    }),
-                  },
-                ],
-              };
+              if (globalMemory && canReadMemory(globalMemory, updateReader)) {
+                const embedding = await globalServices.embeddingService.embed(input.content);
+                const newMemory = globalServices.memoryRepository.createSupersedingMemory(
+                  input.id,
+                  GLOBAL_PROJECT_ID,
+                  input.content,
+                  embedding,
+                  input.language,
+                  undefined // No project root for global
+                );
+
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: JSON.stringify({
+                        id: newMemory.id,
+                        version: newMemory.version,
+                        supersedesId: newMemory.supersedesId,
+                        language: newMemory.language,
+                        scope: 'global',
+                        message: `Memory updated to version ${newMemory.version}`,
+                      }),
+                    },
+                  ],
+                };
+              }
+            } catch {
+              // Global scope not available
             }
-          } catch {
-            // Global scope not available
           }
 
           return {
@@ -1562,6 +1596,16 @@ function createServer(): Server {
         case 'memory_feedback': {
           const input = MemoryFeedbackInputSchema.parse(args);
 
+          // V13: fleet-scope reader identity (T11.4) — a caller must be
+          // able to read the memory it's giving feedback on, otherwise
+          // memory_feedback(wrong/outdated) could rewrite a
+          // restricted/team memory's content without ever passing an
+          // enforced read path.
+          const feedbackReader: ReaderContext = {
+            agentId: input.readerAgentId ?? envAgentId,
+            teamId: input.readerTeamId ?? envTeamId,
+          };
+
           // Try project scope first
           const projectMemory = memoryRepository.findById(input.id, projectId);
           let scope = 'project';
@@ -1569,7 +1613,7 @@ function createServer(): Server {
           let newMemoryId: string | null = null;
           let promotedByFeedback = false;
 
-          if (projectMemory) {
+          if (projectMemory && canReadMemory(projectMemory, feedbackReader)) {
             feedback = memoryRepository.recordFeedback(
               input.id,
               projectId,
@@ -1602,8 +1646,10 @@ function createServer(): Server {
               );
               newMemoryId = newMemory.id;
             }
-          } else {
-            // Try global scope
+          } else if (!projectMemory) {
+            // Try global scope (only when the id wasn't found in project
+            // scope at all — an unreadable project-scope hit must not
+            // fall through to a global lookup).
             try {
               const globalServices = await initializeGlobalScope();
               const globalMemory = globalServices.memoryRepository.findById(
@@ -1611,7 +1657,7 @@ function createServer(): Server {
                 GLOBAL_PROJECT_ID
               );
 
-              if (globalMemory) {
+              if (globalMemory && canReadMemory(globalMemory, feedbackReader)) {
                 scope = 'global';
                 feedback = globalServices.memoryRepository.recordFeedback(
                   input.id,

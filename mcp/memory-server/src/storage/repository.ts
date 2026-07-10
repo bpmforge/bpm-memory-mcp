@@ -552,6 +552,16 @@ export class MemoryRepository {
       input.language = oldMemory.language;
     }
     if (oldMemory.codeContext) input.codeContext = oldMemory.codeContext;
+    // V13: inherit fleet-scope fields (T11.4) — a superseding memory must
+    // keep the same visibility tier and owner as the memory it replaces.
+    // Without this, memory_update/memory_feedback on a restricted/team
+    // memory would silently produce a global-visibility successor,
+    // discoverable via every enforced read path (mass declassification).
+    input.visibility = oldMemory.visibility;
+    if (oldMemory.writerAgentId) input.writerAgentId = oldMemory.writerAgentId;
+    if (oldMemory.writerTeamId) input.writerTeamId = oldMemory.writerTeamId;
+    if (oldMemory.provenance) input.provenance = oldMemory.provenance;
+    if (oldMemory.restrictedReaders) input.restrictedReaders = oldMemory.restrictedReaders;
 
     return this.createMemory(input, embedding, projectRoot);
   }

@@ -103,4 +103,86 @@ describe('MemoryRepository — fleet scopes (T11.4)', () => {
         .run()
     ).toThrow();
   });
+
+  describe('createSupersedingMemory inherits fleet-scope fields (T11.4 review fix)', () => {
+    it('a global memory supersession stays global (no-op regression check)', () => {
+      const original = repo.createMemory({
+        content: 'ordinary global note',
+        projectId: 'test-project',
+      });
+
+      const superseded = repo.createSupersedingMemory(
+        original.id,
+        'test-project',
+        'ordinary global note, corrected'
+      );
+
+      expect(superseded.visibility).toBe('global');
+    });
+
+    it('an agent_local memory supersession keeps visibility + writerAgentId — does NOT declassify to global', () => {
+      const original = repo.createMemory({
+        content: 'scratch note',
+        projectId: 'test-project',
+        visibility: 'agent_local',
+        writerAgentId: 'agent-1',
+      });
+
+      const superseded = repo.createSupersedingMemory(
+        original.id,
+        'test-project',
+        'scratch note, corrected'
+      );
+
+      expect(superseded.visibility).toBe('agent_local');
+      expect(superseded.writerAgentId).toBe('agent-1');
+    });
+
+    it('a team memory supersession keeps visibility + writerTeamId + provenance — does NOT declassify to global', () => {
+      const original = repo.createMemory({
+        content: 'team runbook entry',
+        projectId: 'test-project',
+        visibility: 'team',
+        writerAgentId: 'agent-1',
+        writerTeamId: 'team-a',
+        provenance: 'runbook sync 2026-07-10',
+      });
+
+      const superseded = repo.createSupersedingMemory(
+        original.id,
+        'test-project',
+        'team runbook entry, corrected'
+      );
+
+      expect(superseded.visibility).toBe('team');
+      expect(superseded.writerTeamId).toBe('team-a');
+      expect(superseded.provenance).toBe('runbook sync 2026-07-10');
+    });
+
+    it('a restricted memory supersession keeps visibility + restrictedReaders — does NOT declassify to global', () => {
+      const original = repo.createMemory({
+        content: 'need-to-know note',
+        projectId: 'test-project',
+        visibility: 'restricted',
+        writerAgentId: 'agent-1',
+        provenance: 'need-to-know',
+        restrictedReaders: ['agent-a', 'agent-b'],
+      });
+
+      const superseded = repo.createSupersedingMemory(
+        original.id,
+        'test-project',
+        'need-to-know note, corrected'
+      );
+
+      expect(superseded.visibility).toBe('restricted');
+      expect(superseded.writerAgentId).toBe('agent-1');
+      expect(superseded.provenance).toBe('need-to-know');
+      expect(superseded.restrictedReaders).toEqual(['agent-a', 'agent-b']);
+
+      const reloaded = repo.findById(superseded.id, 'test-project');
+      expect(reloaded?.visibility).toBe('restricted');
+      expect(reloaded?.restrictedReaders).toEqual(['agent-a', 'agent-b']);
+    });
+  });
 });

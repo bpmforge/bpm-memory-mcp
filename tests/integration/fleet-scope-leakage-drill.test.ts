@@ -6,6 +6,7 @@ import { BM25Search } from '../../mcp/memory-server/src/search/bm25.js';
 import { MemoryGraphService } from '../../mcp/memory-server/src/graph/memory-graph.js';
 import { MemoryLinkRepository } from '../../mcp/memory-server/src/storage/links.js';
 import { MemoryLinkType } from '../../mcp/memory-server/src/types.js';
+import { canReadMemory } from '../../mcp/memory-server/src/fleet/visibility.js';
 
 /**
  * T11.4 leakage drill: for every fleet-visibility tier, plant a memory and
@@ -253,6 +254,53 @@ describe('Fleet-scope leakage drill (T11.4)', () => {
           (c) => c.source.id === restrictedMemory.id || c.target.id === restrictedMemory.id
         )
       ).toBe(true);
+    });
+  });
+
+  describe('memory_history filters unreadable versions (review fix)', () => {
+    it('mirrors index.ts memory_history: getVersionHistory + per-item canReadMemory hides every version from an unauthorized reader, and returns the full chain to the writer', () => {
+      const restrictedMemory = planted.find((p) => p.label === 'restricted')!;
+
+      const corrected = repo.createSupersedingMemory(
+        restrictedMemory.id,
+        PROJECT_ID,
+        'gorvantek credential rotation schedule, v2, need-to-know only'
+      );
+
+      const chain = repo.getVersionHistory(corrected.id, PROJECT_ID);
+      expect(chain.length).toBe(2);
+
+      const unauthorized = chain.filter((m) => canReadMemory(m, { agentId: 'agent-other' }));
+      expect(unauthorized).toHaveLength(0);
+
+      const authorized = chain.filter((m) => canReadMemory(m, { agentId: 'agent-allowlisted' }));
+      expect(authorized).toHaveLength(2);
+    });
+  });
+
+  describe('supersession does not declassify (review fix: memory_update / memory_feedback correction path)', () => {
+    it('correcting a restricted memory (as memory_feedback(wrong/outdated) would) never makes the successor globally discoverable', () => {
+      const restrictedMemory = planted.find((p) => p.label === 'restricted')!;
+
+      // Mirrors what index.ts memory_feedback/memory_update do on a
+      // correction: createSupersedingMemory() off the original id.
+      const corrected = repo.createSupersedingMemory(
+        restrictedMemory.id,
+        PROJECT_ID,
+        'gorvantek credential rotation schedule, corrected wording, need-to-know only'
+      );
+
+      expect(corrected.visibility).toBe('restricted');
+
+      for (const reader of READERS) {
+        const results = bm25.search('gorvantek', PROJECT_ID, {
+          readerAgentId: reader.ctx.agentId,
+          readerTeamId: reader.ctx.teamId,
+        });
+        const found = results.some((r) => r.memory.id === corrected.id);
+        const shouldSee = reader.label === 'allowlisted-reader';
+        expect(found).toBe(shouldSee);
+      }
     });
   });
 });

@@ -555,6 +555,10 @@ export const MemoryUpdateInputSchema = z.object({
   // V2 optional updates
   language: LanguageSchema.optional(),
   codeContext: CodeContextSchema.optional(),
+  // V13: fleet-scope reader identity (T11.4) — the caller must be able to
+  // read the memory it's superseding.
+  readerAgentId: z.string().min(1).max(200).optional(),
+  readerTeamId: z.string().min(1).max(200).optional(),
 });
 
 export const MemoryFeedbackInputSchema = z.object({
@@ -562,6 +566,10 @@ export const MemoryFeedbackInputSchema = z.object({
   feedback: FeedbackTypeSchema,
   correction: z.string().max(50000).optional(),
   duplicateOf: z.string().uuid().optional(),
+  // V13: fleet-scope reader identity (T11.4) — the caller must be able to
+  // read the memory it's giving feedback on.
+  readerAgentId: z.string().min(1).max(200).optional(),
+  readerTeamId: z.string().min(1).max(200).optional(),
 });
 
 export const SessionSaveInputSchema = z.object({
