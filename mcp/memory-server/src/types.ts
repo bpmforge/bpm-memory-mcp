@@ -75,6 +75,9 @@ export enum MemoryScope {
 // decay to ~0 within days of going unverified.
 export type Volatility = 'static' | 'slow' | 'volatile';
 
+// V12: why a quarantined memory was promoted back into default recall (T11.3).
+export type PromotionReason = 'corroboration' | 'human_touch';
+
 export enum SymbolType {
   FUNCTION = 'function',
   CLASS = 'class',
@@ -229,6 +232,13 @@ export interface Memory {
   // re-verification for research claims only) — see T11.3-note.
   volatility: Volatility;
   verifiedAt: Date | null;
+  // V12 fields (quarantine + promotion — T11.3). quarantinedAt non-null means
+  // the memory is excluded from default recall (search/index.ts, bm25.ts).
+  // promotedAt/promotionReason are set once a quarantined memory is promoted
+  // (corroboration or human touch) and quarantinedAt is cleared back to null.
+  quarantinedAt: Date | null;
+  promotedAt: Date | null;
+  promotionReason: PromotionReason | null;
 }
 
 export interface MemoryFeedback {
@@ -251,6 +261,9 @@ export interface MemoryCreateInput {
   language?: Language;
   codeContext?: CodeContext;
   supersedesId?: string;
+  // V12: create this memory already quarantined (T11.3 — used by fact_store
+  // for web-derived auto-extracts).
+  quarantine?: boolean;
 }
 
 export interface MemorySearchResult {
@@ -280,6 +293,8 @@ export interface SearchOptions {
   language?: Language;
   includeStale?: boolean;
   includeSuperseded?: boolean;
+  // V12: exclude quarantined memories by default (T11.3).
+  includeQuarantined?: boolean;
 }
 
 // ============================================================================
@@ -460,6 +475,8 @@ export const MemoryRecallInputSchema = z.object({
   // V6: Global memory support - 'both' searches global + project (default)
   // V8: 'all' searches ALL projects (cross-project search)
   scope: z.enum(['project', 'global', 'both', 'all']).optional().default('both'),
+  // V12: quarantined memories (web-derived, unpromoted) are excluded by default (T11.3)
+  includeQuarantined: z.boolean().optional().default(false),
 });
 
 export const MemoryForgetInputSchema = z.object({
@@ -579,6 +596,8 @@ export const FactQueryInputSchema = z.object({
     .default(true)
     .describe('Include contradicting facts in results'),
   scope: z.enum(['project', 'global', 'both']).optional().default('both'),
+  // V12: quarantined facts (single-source, unpromoted) are excluded by default (T11.3)
+  includeQuarantined: z.boolean().optional().default(false),
 });
 
 // Type exports from Zod schemas

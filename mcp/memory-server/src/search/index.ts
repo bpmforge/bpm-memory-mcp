@@ -163,6 +163,11 @@ export class HybridSearch {
       sql += ' AND flagged_at IS NULL';
     }
 
+    // V12: Exclude quarantined (unpromoted, web-derived) memories by default
+    if (!options.includeQuarantined) {
+      sql += ' AND quarantined_at IS NULL';
+    }
+
     if (options.type) {
       sql += ' AND type = ?';
       params.push(options.type);
@@ -189,8 +194,14 @@ export class HybridSearch {
    * BM25 keyword search
    */
   private bm25SearchMemories(query: string, options: SearchOptions): MemorySearchResult[] {
-    const bm25Options: { limit?: number; type?: MemoryType; minConfidence?: number } = {
+    const bm25Options: {
+      limit?: number;
+      type?: MemoryType;
+      minConfidence?: number;
+      includeQuarantined?: boolean;
+    } = {
       limit: (options.limit ?? 10) * 2,
+      includeQuarantined: options.includeQuarantined ?? false,
     };
     if (options.type) bm25Options.type = options.type;
     if (options.minConfidence !== undefined) bm25Options.minConfidence = options.minConfidence;
@@ -238,6 +249,7 @@ export class HybridSearch {
           continue;
         if (!options.includeSuperseded && memory.supersededBy) continue;
         if (!options.includeStale && memory.flaggedAt) continue;
+        if (!options.includeQuarantined && memory.quarantinedAt) continue;
         if (options.language && memory.language !== options.language) continue;
 
         // Calculate score: linkStrength * distance_decay^distance
@@ -300,6 +312,10 @@ export class HybridSearch {
       // V11 fields
       volatility: (row.volatility as Memory['volatility']) ?? 'slow',
       verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
+      // V12 fields
+      quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
+      promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
+      promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
     };
   }
 }
@@ -346,4 +362,8 @@ interface MemoryRow {
   // V11 columns
   volatility?: string | null;
   verified_at?: number | null;
+  // V12 columns
+  quarantined_at?: number | null;
+  promoted_at?: number | null;
+  promotion_reason?: string | null;
 }

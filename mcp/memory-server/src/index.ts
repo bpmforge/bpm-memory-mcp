@@ -46,7 +46,9 @@ import {
   type MemoryCreateInput,
   type SearchOptions,
   type CodeContext,
+  type PromotionReason,
 } from './types.js';
+import { findCorroboratingMemory, buildCorroborationCandidates } from './quarantine/index.js';
 import { GoalRepository } from './goals/index.js';
 import { calculateDriftIndicator, getDriftWarningMessage } from './goals/drift.js';
 import { MemoryLinkRepository } from './storage/links.js';
@@ -1183,6 +1185,7 @@ function createServer(): Server {
             minConfidence: input.minConfidence,
             includeStale: input.includeStale,
             includeSuperseded: input.includeSuperseded,
+            includeQuarantined: input.includeQuarantined,
           };
           if (input.type) baseOptions.type = input.type;
           if (input.language) baseOptions.language = input.language;
@@ -1514,6 +1517,7 @@ function createServer(): Server {
           let scope = 'project';
           let feedback;
           let newMemoryId: string | null = null;
+          let promotedByFeedback = false;
 
           if (projectMemory) {
             feedback = memoryRepository.recordFeedback(
@@ -1523,6 +1527,18 @@ function createServer(): Server {
               input.correction,
               input.duplicateOf
             );
+
+            // T11.3: "human touch" promotion — only an affirming touch
+            // (helpful) counts. wrong/outdated/duplicate are corrections or
+            // dedup signals, not trust affirmations, and must NOT promote a
+            // quarantined memory into default recall.
+            if (input.feedback === 'helpful') {
+              promotedByFeedback = memoryRepository.promoteFromQuarantine(
+                input.id,
+                projectId,
+                'human_touch'
+              );
+            }
 
             if (input.correction && (input.feedback === 'wrong' || input.feedback === 'outdated')) {
               const embedding = await embeddingService.embed(input.correction);
@@ -1554,6 +1570,14 @@ function createServer(): Server {
                   input.correction,
                   input.duplicateOf
                 );
+
+                if (input.feedback === 'helpful') {
+                  promotedByFeedback = globalServices.memoryRepository.promoteFromQuarantine(
+                    input.id,
+                    GLOBAL_PROJECT_ID,
+                    'human_touch'
+                  );
+                }
 
                 if (
                   input.correction &&
@@ -1597,6 +1621,7 @@ function createServer(): Server {
                   confidenceDelta: feedback.confidenceDelta,
                   newMemoryId,
                   scope,
+                  promotedFromQuarantine: promotedByFeedback,
                   message: newMemoryId
                     ? `Feedback recorded (${scope}). New corrected memory created: ${newMemoryId}`
                     : `Feedback recorded (${scope}). Confidence adjusted by ${feedback.confidenceDelta}`,
@@ -3488,13 +3513,16 @@ function createServer(): Server {
             };
           }
 
-          // Create base memory
+          // Create base memory. T11.3: fact_store is the web-derived
+          // auto-extract path (bpm-pull/reddit-pull research fetchers feed
+          // it, per T8.3) — every fact lands quarantined until promoted.
           const memoryInput: MemoryCreateInput = {
             content,
             type: MemoryType.FACT,
             confidence: input.confidence,
             projectId: targetProjectId,
             citation: input.sourceUrl,
+            quarantine: true,
           };
 
           // Contradiction detection
@@ -3591,6 +3619,38 @@ function createServer(): Server {
             }
           }
 
+          // T11.3: promote on corroboration — a second, independent-source
+          // fact (different source_url) reporting the same claim, decided by
+          // embedding similarity via the auto-created links just computed.
+          // Only `links` (auto-created, >= autoLinkThreshold) are eligible —
+          // `suggestions` carry no linkType in this response shape, so a
+          // CONTRADICTS suggestion couldn't be told apart from a genuine
+          // match; excluding them sidesteps that entirely. Within `links`,
+          // CONTRADICTS must NEVER promote — two high-similarity facts of
+          // opposite polarity (e.g. "retries" vs "does not retry") are
+          // exactly what CONTRADICTS flags, and promoting on disagreement
+          // would defeat the quarantine's purpose.
+          let promoted = false;
+          let promotionReason: PromotionReason | null = null;
+
+          if (db && autoLinkResult && autoLinkResult.links.length > 0) {
+            const candidateIds = autoLinkResult.links.map((l) => l.targetId);
+            const placeholders = candidateIds.map(() => '?').join(', ');
+            const rows = db.instance
+              .prepare(`SELECT id, source_url FROM memories WHERE id IN (${placeholders})`)
+              .all(...candidateIds) as Array<{ id: string; source_url: string | null }>;
+            const sourceUrlById = new Map(rows.map((r) => [r.id, r.source_url]));
+
+            const candidates = buildCorroborationCandidates(autoLinkResult.links, sourceUrlById);
+            const corroboratingId = findCorroboratingMemory(candidates, input.sourceUrl);
+            if (corroboratingId) {
+              targetRepo.promoteFromQuarantine(memory.id, targetProjectId, 'corroboration');
+              targetRepo.promoteFromQuarantine(corroboratingId, targetProjectId, 'corroboration');
+              promoted = true;
+              promotionReason = 'corroboration';
+            }
+          }
+
           return {
             content: [
               {
@@ -3607,6 +3667,9 @@ function createServer(): Server {
                   hasEmbedding: !!embedding,
                   contradictionWarning,
                   autoLinks: autoLinkResult,
+                  quarantined: !promoted,
+                  promoted,
+                  promotionReason,
                 }),
               },
             ],
@@ -3626,6 +3689,7 @@ function createServer(): Server {
             limit: (input.limit ?? 10) * 2, // Over-fetch to allow post-filtering
             minConfidence: input.minConfidence,
             includeStale: input.includeStale,
+            includeQuarantined: input.includeQuarantined,
           };
 
           const results = await hybridSearch.search(input.query, searchOptions);

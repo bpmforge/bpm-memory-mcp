@@ -21,6 +21,8 @@ export class BM25Search {
       language?: Language;
       includeStale?: boolean;
       includeSuperseded?: boolean;
+      // V12 filter
+      includeQuarantined?: boolean;
     } = {}
   ): MemorySearchResult[] {
     const limit = options.limit ?? 10;
@@ -49,6 +51,11 @@ export class BM25Search {
     // V2: Exclude stale by default
     if (!options.includeStale) {
       sql += ' AND m.flagged_at IS NULL';
+    }
+
+    // V12: Exclude quarantined (unpromoted, web-derived) memories by default
+    if (!options.includeQuarantined) {
+      sql += ' AND m.quarantined_at IS NULL';
     }
 
     if (options.type) {
@@ -157,6 +164,10 @@ export class BM25Search {
       // V11 fields
       volatility: (row.volatility as Memory['volatility']) ?? 'slow',
       verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
+      // V12 fields
+      quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
+      promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
+      promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
     };
   }
 }
@@ -203,4 +214,8 @@ interface MemoryRow {
   // V11 columns
   volatility?: string | null;
   verified_at?: number | null;
+  // V12 columns
+  quarantined_at?: number | null;
+  promoted_at?: number | null;
+  promotion_reason?: string | null;
 }

@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 11;
+export const CURRENT_VERSION = 12;
 
 /**
  * Initial schema - Version 1
@@ -419,6 +419,30 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
     down: `
       DROP INDEX IF EXISTS idx_memories_volatility;
       DROP INDEX IF EXISTS idx_memories_temporal;
+      -- Note: SQLite doesn't support DROP COLUMN directly
+    `,
+  },
+  // V12: Quarantine scope + promotion (T11.3). Web-derived auto-extracts
+  // (fact_store) land quarantined by default and are excluded from recall
+  // (search/index.ts, bm25.ts) until promoted — either by corroboration
+  // (a second independent-source fact, matched by embedding similarity, see
+  // src/quarantine/corroboration.ts) or by human touch (affirming feedback,
+  // see index.ts's memory_feedback handler). Follows the existing
+  // nullable-timestamp-as-flag idiom (flagged_at/superseded_at) rather than
+  // an enum column: quarantined_at IS NULL is the hot-path filter.
+  {
+    version: 12,
+    up: `
+      ALTER TABLE memories ADD COLUMN quarantined_at INTEGER;
+      ALTER TABLE memories ADD COLUMN promoted_at INTEGER;
+      ALTER TABLE memories ADD COLUMN promotion_reason TEXT CHECK (
+        promotion_reason IS NULL OR promotion_reason IN ('corroboration', 'human_touch')
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memories_quarantine ON memories(project_id, quarantined_at);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_quarantine;
       -- Note: SQLite doesn't support DROP COLUMN directly
     `,
   },
