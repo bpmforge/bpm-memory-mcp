@@ -15,6 +15,7 @@
 
 import type Database from 'better-sqlite3';
 import { ConsolidationService, type ConsolidationOptions } from './index.js';
+import { appendConsolidationLog, DEFAULT_CONSOLIDATION_LOG_PATH } from './run-log.js';
 
 export interface SchedulerConfig {
   /** Master switch. Default false (opt-in). */
@@ -23,6 +24,9 @@ export interface SchedulerConfig {
   intervalMs: number;
   /** Options passed to consolidate() when a run fires. */
   options: ConsolidationOptions;
+  /** Path to append per-run JSONL summaries to. Defaults to
+   *  `DEFAULT_CONSOLIDATION_LOG_PATH` when omitted (see fromEnv). */
+  logPath?: string;
 }
 
 export interface SchedulerOutcome {
@@ -46,16 +50,21 @@ export class ConsolidationScheduler {
    * Build a scheduler from environment configuration.
    * - CLAUDE_MEMORY_SLEEP_CONSOLIDATION=true enables it (default off)
    * - CLAUDE_MEMORY_CONSOLIDATION_INTERVAL_HOURS sets the throttle (default 24)
+   * - CLAUDE_MEMORY_CONSOLIDATION_LOG_PATH overrides the run-log location
+   *   (default DEFAULT_CONSOLIDATION_LOG_PATH)
    */
   static fromEnv(db: Database.Database): ConsolidationScheduler {
     const enabled = process.env.CLAUDE_MEMORY_SLEEP_CONSOLIDATION === 'true';
     const rawHours = Number(process.env.CLAUDE_MEMORY_CONSOLIDATION_INTERVAL_HOURS);
     const hours = Number.isFinite(rawHours) && rawHours > 0 ? rawHours : DEFAULT_INTERVAL_HOURS;
+    const logPath =
+      process.env.CLAUDE_MEMORY_CONSOLIDATION_LOG_PATH || DEFAULT_CONSOLIDATION_LOG_PATH;
     return new ConsolidationScheduler(db, {
       enabled,
       intervalMs: hours * 60 * 60 * 1000,
       // Conservative defaults; persist distilled summaries (episodic→semantic).
       options: { persistSummaries: true },
+      logPath,
     });
   }
 
@@ -66,8 +75,8 @@ export class ConsolidationScheduler {
   async maybeRun(projectId: string): Promise<SchedulerOutcome> {
     if (!this.config.enabled) return { ran: false, reason: 'disabled' };
 
+    const nowMs = Date.now();
     try {
-      const nowMs = Date.now();
       const last = this.getLastRun(projectId);
       if (last != null && nowMs - last < this.config.intervalMs) {
         return { ran: false, reason: 'throttled' };
@@ -77,16 +86,35 @@ export class ConsolidationScheduler {
       const result = await service.consolidate(projectId, this.config.options);
       this.recordRun(projectId, nowMs, result.stats.summariesPersisted);
 
-      return {
+      const outcome: SchedulerOutcome = {
         ran: true,
         reason: 'ok',
         summariesPersisted: result.stats.summariesPersisted,
         merged: result.merged.length,
         decayed: result.decayed.length,
       };
+      this.logRun(projectId, outcome, nowMs);
+      return outcome;
     } catch (err) {
-      return { ran: false, reason: 'error', detail: (err as Error).message };
+      const outcome: SchedulerOutcome = {
+        ran: false,
+        reason: 'error',
+        detail: (err as Error).message,
+      };
+      this.logRun(projectId, outcome, nowMs);
+      return outcome;
     }
+  }
+
+  /** Per-run summary line, appended for every attempted run ('ok' or 'error' —
+   *  not 'disabled'/'throttled', which never touched the database). */
+  private logRun(projectId: string, outcome: SchedulerOutcome, atMs: number): void {
+    appendConsolidationLog(
+      this.config.logPath ?? DEFAULT_CONSOLIDATION_LOG_PATH,
+      projectId,
+      outcome,
+      atMs
+    );
   }
 
   private getLastRun(projectId: string): number | null {
