@@ -11,6 +11,7 @@
  *   delete     Delete a memory by ID
  *   export     Export memories to JSON
  *   import     Import memories from JSON
+ *   snapshot   Raw-file DB snapshot of all (or one) project(s), verified
  *   stats      Show memory statistics
  *   consolidate Run memory consolidation
  *   projects   List all projects with memories
@@ -32,6 +33,7 @@ import { EmbeddingService } from './embeddings/index.js';
 import { HybridSearch } from './search/index.js';
 import { ConsolidationService } from './consolidation/index.js';
 import { MemoryType, type Language } from './types.js';
+import { resolveMemoryRoot, runSnapshot } from './backup/snapshot.js';
 
 // Memory directory path
 const MEMORY_DIR = join(homedir(), '.claude-memory');
@@ -90,6 +92,9 @@ async function main() {
       case 'import':
         await importMemories(args.slice(1));
         break;
+      case 'snapshot':
+        await snapshotMemories(args.slice(1));
+        break;
       case 'stats':
         await showStats(args.slice(1));
         break;
@@ -123,6 +128,7 @@ ${colors.bold}Commands:${colors.reset}
   delete      Delete memory (--id <uuid>, --project <path>)
   export      Export to JSON (--project <path>, --output <file>)
   import      Import from JSON (--project <path>, --input <file>)
+  snapshot    Raw-file DB snapshot, verified (--output <dir>, --memory-dir <path>)
   stats       Show statistics (--project <path>)
   consolidate Run consolidation (--project <path>, --dry-run, --persist-summaries)
   projects    List all projects with memory databases
@@ -134,8 +140,9 @@ ${colors.bold}Options:${colors.reset}
   --limit <n>       Limit results (default: 20)
   --query <text>    Search query text
   --id <uuid>       Memory ID for delete
-  --output <file>   Output file for export
+  --output <file>   Output file for export, output dir for snapshot
   --input <file>    Input file for import
+  --memory-dir <path>  claude-memory root to snapshot (default: ~/.claude-memory)
   --dry-run         Preview changes without applying
   --persist-summaries  Persist cluster summaries as semantic memories (episodic→semantic)
 
@@ -143,6 +150,7 @@ ${colors.bold}Examples:${colors.reset}
   memory-cli list --limit 10
   memory-cli search --query "authentication" --type decision
   memory-cli export --output memories.json
+  memory-cli snapshot --output ./restore-drill-2026-07-10
   memory-cli consolidate --dry-run
   memory-cli projects
 `);
@@ -160,6 +168,7 @@ function parseOptions(args: string[]) {
       id: { type: 'string' },
       output: { type: 'string', short: 'o' },
       input: { type: 'string', short: 'i' },
+      'memory-dir': { type: 'string' },
       'dry-run': { type: 'boolean' },
       'persist-summaries': { type: 'boolean' },
     },
@@ -451,6 +460,42 @@ async function importMemories(args: string[]) {
   }
 
   success(`Imported ${imported} memories (${skipped} duplicates skipped)`);
+}
+
+async function snapshotMemories(args: string[]) {
+  const options = parseOptions(args);
+  const memoryRoot = resolveMemoryRoot(options['memory-dir']);
+  const destDir =
+    options.output ??
+    join(process.cwd(), `memory-snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+
+  heading(`Snapshotting claude-memory brain: ${memoryRoot}`);
+
+  const result = await runSnapshot(memoryRoot, destDir);
+
+  if (result.files.length === 0) {
+    log(`No project databases found under ${memoryRoot}.`);
+    return;
+  }
+
+  for (const f of result.files) {
+    if (f.ok) {
+      success(`${f.projectId}: ${f.bytes} bytes, verified`);
+    } else {
+      error(`${f.projectId}: ${f.error}`);
+    }
+  }
+
+  const failures = result.files.filter((f) => !f.ok);
+  log('');
+  if (failures.length > 0) {
+    error(`${failures.length} of ${result.files.length} project DB(s) failed to snapshot cleanly`);
+    process.exitCode = 1;
+  } else {
+    success(
+      `Snapshotted ${result.files.length} project DB(s), ${result.totalBytes} bytes, to ${destDir}`
+    );
+  }
 }
 
 async function showStats(args: string[]) {
