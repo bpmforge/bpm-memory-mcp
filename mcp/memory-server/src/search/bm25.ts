@@ -154,6 +154,9 @@ export class BM25Search {
       lastVerified: row.last_verified ? new Date(row.last_verified * 1000) : null,
       usedIn: row.used_in ? JSON.parse(row.used_in) : null,
       extractedBy: row.extracted_by ?? null,
+      // V11 fields
+      volatility: (row.volatility as Memory['volatility']) ?? 'slow',
+      verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
     };
   }
 }
@@ -197,4 +200,7 @@ interface MemoryRow {
   last_verified?: number | null;
   used_in?: string | null;
   extracted_by?: string | null;
+  // V11 columns
+  volatility?: string | null;
+  verified_at?: number | null;
 }

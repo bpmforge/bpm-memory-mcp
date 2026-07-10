@@ -139,6 +139,10 @@ export class MemoryRepository {
         lastVerified: null,
         usedIn: null,
         extractedBy: null,
+        // V11 fields — not set by this INSERT, so these mirror the column
+        // defaults (volatility NOT NULL DEFAULT 'slow', verified_at NULL).
+        volatility: 'slow',
+        verifiedAt: null,
       };
     });
   }
@@ -448,6 +452,9 @@ export class MemoryRepository {
       lastVerified: row.last_verified ? new Date(row.last_verified * 1000) : null,
       usedIn: row.used_in ? JSON.parse(row.used_in) : null,
       extractedBy: row.extracted_by ?? null,
+      // V11 fields
+      volatility: (row.volatility as Memory['volatility']) ?? 'slow',
+      verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
     };
   }
 
@@ -725,4 +732,7 @@ interface MemoryRow {
   last_verified: number | null;
   used_in: string | null;
   extracted_by: string | null;
+  // V11 columns
+  volatility: string;
+  verified_at: number | null;
 }
