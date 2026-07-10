@@ -49,6 +49,10 @@ interface MemoryRow {
   // V11 columns
   volatility?: string | null;
   verified_at?: number | null;
+  // V12 columns
+  quarantined_at?: number | null;
+  promoted_at?: number | null;
+  promotion_reason?: string | null;
 }
 
 /**
@@ -264,6 +268,10 @@ export class StalenessDetector {
       // V11 fields
       volatility: (row.volatility as Memory['volatility']) ?? 'slow',
       verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
+      // V12 fields
+      quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
+      promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
+      promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
     };
   }
 }

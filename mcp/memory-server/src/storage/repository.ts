@@ -9,6 +9,7 @@ import type {
   FeedbackType,
   Language,
   CodeContext,
+  PromotionReason,
 } from '../types.js';
 import {
   detectLanguage,
@@ -75,13 +76,15 @@ export class MemoryRepository {
         }
       }
 
+      const quarantinedAt = input.quarantine ? now : null;
+
       this.db.instance
         .prepare(
           `INSERT INTO memories (
             id, content, embedding, type, confidence, citation,
             project_id, content_hash, created_at, accessed_at, access_count,
-            language, code_context, version, supersedes_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
+            language, code_context, version, supersedes_id, quarantined_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -97,7 +100,8 @@ export class MemoryRepository {
           language,
           codeContextJson,
           version,
-          input.supersedesId ?? null
+          input.supersedesId ?? null,
+          quarantinedAt
         );
 
       return {
@@ -143,6 +147,10 @@ export class MemoryRepository {
         // defaults (volatility NOT NULL DEFAULT 'slow', verified_at NULL).
         volatility: 'slow',
         verifiedAt: null,
+        // V12 fields (quarantine — T11.3)
+        quarantinedAt: quarantinedAt ? new Date(quarantinedAt * 1000) : null,
+        promotedAt: null,
+        promotionReason: null,
       };
     });
   }
@@ -455,7 +463,32 @@ export class MemoryRepository {
       // V11 fields
       volatility: (row.volatility as Memory['volatility']) ?? 'slow',
       verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
+      // V12 fields (quarantine — T11.3)
+      quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
+      promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
+      promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
     };
+  }
+
+  // ========================================================================
+  // V12: Quarantine Methods (T11.3)
+  // ========================================================================
+
+  /**
+   * Promote a quarantined memory back into default recall. No-op (returns
+   * false) if the memory isn't currently quarantined.
+   */
+  promoteFromQuarantine(id: string, projectId: string, reason: PromotionReason): boolean {
+    const now = Math.floor(Date.now() / 1000);
+    const result = this.db.instance
+      .prepare(
+        `UPDATE memories
+         SET quarantined_at = NULL, promoted_at = ?, promotion_reason = ?
+         WHERE id = ? AND project_id = ? AND quarantined_at IS NOT NULL`
+      )
+      .run(now, reason, id, projectId);
+
+    return result.changes > 0;
   }
 
   // ========================================================================
@@ -735,4 +768,8 @@ interface MemoryRow {
   // V11 columns
   volatility: string;
   verified_at: number | null;
+  // V12 columns
+  quarantined_at: number | null;
+  promoted_at: number | null;
+  promotion_reason: string | null;
 }
