@@ -77,14 +77,22 @@ export class MemoryRepository {
       }
 
       const quarantinedAt = input.quarantine ? now : null;
+      const visibility = input.visibility ?? 'global';
+      const writerAgentId = input.writerAgentId ?? null;
+      const writerTeamId = input.writerTeamId ?? null;
+      const provenance = input.provenance ?? null;
+      const restrictedReadersJson = input.restrictedReaders
+        ? JSON.stringify(input.restrictedReaders)
+        : null;
 
       this.db.instance
         .prepare(
           `INSERT INTO memories (
             id, content, embedding, type, confidence, citation,
             project_id, content_hash, created_at, accessed_at, access_count,
-            language, code_context, version, supersedes_id, quarantined_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
+            language, code_context, version, supersedes_id, quarantined_at,
+            visibility, writer_agent_id, writer_team_id, provenance, restricted_readers
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           id,
@@ -101,7 +109,12 @@ export class MemoryRepository {
           codeContextJson,
           version,
           input.supersedesId ?? null,
-          quarantinedAt
+          quarantinedAt,
+          visibility,
+          writerAgentId,
+          writerTeamId,
+          provenance,
+          restrictedReadersJson
         );
 
       return {
@@ -151,6 +164,12 @@ export class MemoryRepository {
         quarantinedAt: quarantinedAt ? new Date(quarantinedAt * 1000) : null,
         promotedAt: null,
         promotionReason: null,
+        // V13 fields (fleet scopes — T11.4)
+        visibility,
+        writerAgentId,
+        writerTeamId,
+        provenance,
+        restrictedReaders: input.restrictedReaders ?? null,
       };
     });
   }
@@ -467,6 +486,12 @@ export class MemoryRepository {
       quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
       promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
       promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
+      // V13 fields (fleet scopes — T11.4)
+      visibility: (row.visibility as Memory['visibility']) ?? 'global',
+      writerAgentId: row.writer_agent_id ?? null,
+      writerTeamId: row.writer_team_id ?? null,
+      provenance: row.provenance ?? null,
+      restrictedReaders: row.restricted_readers ? JSON.parse(row.restricted_readers) : null,
     };
   }
 
@@ -772,4 +797,10 @@ interface MemoryRow {
   quarantined_at: number | null;
   promoted_at: number | null;
   promotion_reason: string | null;
+  // V13 columns
+  visibility: string;
+  writer_agent_id: string | null;
+  writer_team_id: string | null;
+  provenance: string | null;
+  restricted_readers: string | null;
 }

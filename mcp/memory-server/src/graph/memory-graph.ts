@@ -1,6 +1,7 @@
 import type { DatabaseConnection } from '../storage/database.js';
-import type { MemoryLink } from '../types.js';
+import type { MemoryLink, MemoryVisibility } from '../types.js';
 import { MemoryLinkRepository } from '../storage/links.js';
+import { buildVisibilityClause, canReadMemory, type ReaderContext } from '../fleet/visibility.js';
 
 /**
  * Graph statistics for memory links
@@ -68,6 +69,28 @@ interface MemoryRow {
   confidence: number;
   created_at: number;
   project_id: string;
+  // V13 columns (fleet scopes — T11.4), present via SELECT * queries below
+  visibility?: string | null;
+  writer_agent_id?: string | null;
+  writer_team_id?: string | null;
+  restricted_readers?: string | null;
+}
+
+/** Narrows a fetched row to the fields canReadMemory needs. */
+function visibilityFieldsOf(row: {
+  visibility?: string | null;
+  writer_agent_id?: string | null;
+  writer_team_id?: string | null;
+  restricted_readers?: string | null;
+}) {
+  return {
+    visibility: (row.visibility ?? 'global') as MemoryVisibility,
+    writerAgentId: row.writer_agent_id ?? null,
+    writerTeamId: row.writer_team_id ?? null,
+    restrictedReaders: row.restricted_readers
+      ? (JSON.parse(row.restricted_readers) as string[])
+      : null,
+  };
 }
 
 /**
@@ -81,9 +104,12 @@ export class MemoryGraphService {
   }
 
   /**
-   * Get graph statistics
+   * Get graph statistics. Aggregate counts (totalMemories, linkDensity, etc.)
+   * are not visibility-scoped — they reveal existence/shape only, not
+   * content. mostConnected DOES expose content, so it's filtered per
+   * canReadMemory (T11.4).
    */
-  getStats(projectId: string): MemoryGraphStats {
+  getStats(projectId: string, reader: ReaderContext = {}): MemoryGraphStats {
     const memCount = this.db.instance
       .prepare(
         `SELECT COUNT(*) as c FROM memories
@@ -123,7 +149,8 @@ export class MemoryGraphService {
 
     const mostConnectedRows = this.db.instance
       .prepare(
-        `SELECT m.id, m.content, COUNT(ml.id) as lc
+        `SELECT m.id, m.content, COUNT(ml.id) as lc,
+                m.visibility, m.writer_agent_id, m.writer_team_id, m.restricted_readers
          FROM memories m
          LEFT JOIN memory_links ml ON ml.source_id = m.id OR ml.target_id = m.id
          WHERE m.project_id = ? AND m.deleted_at IS NULL AND m.superseded_by IS NULL
@@ -132,7 +159,15 @@ export class MemoryGraphService {
          ORDER BY lc DESC
          LIMIT 5`
       )
-      .all(projectId) as Array<{ id: string; content: string; lc: number }>;
+      .all(projectId) as Array<{
+      id: string;
+      content: string;
+      lc: number;
+      visibility: string | null;
+      writer_agent_id: string | null;
+      writer_team_id: string | null;
+      restricted_readers: string | null;
+    }>;
 
     const totalMemories = memCount.c;
     const totalLinks = linkCount.c;
@@ -144,27 +179,36 @@ export class MemoryGraphService {
       linkedMemories,
       orphanMemories: totalMemories - linkedMemories,
       linkDensity: totalMemories > 0 ? Math.round((linkedMemories / totalMemories) * 100) / 100 : 0,
-      averageLinksPerMemory: totalMemories > 0 ? Math.round((totalLinks / totalMemories) * 100) / 100 : 0,
+      averageLinksPerMemory:
+        totalMemories > 0 ? Math.round((totalLinks / totalMemories) * 100) / 100 : 0,
       linksByType,
       contradictionCount: linksByType['contradicts'] ?? 0,
-      mostConnected: mostConnectedRows.map((r) => ({
-        id: r.id,
-        content: r.content.length > 80 ? r.content.substring(0, 80) + '...' : r.content,
-        linkCount: r.lc,
-      })),
+      mostConnected: mostConnectedRows
+        .filter((r) => canReadMemory(visibilityFieldsOf(r), reader))
+        .map((r) => ({
+          id: r.id,
+          content: r.content.length > 80 ? r.content.substring(0, 80) + '...' : r.content,
+          linkCount: r.lc,
+        })),
     };
   }
 
   /**
-   * Find all contradictions
+   * Find all contradictions. Both sides of a pair must be readable by the
+   * given reader (T11.4) — a contradiction with one hidden side would leak
+   * "content this reader can't see exists and conflicts with X".
    */
-  findContradictions(projectId: string): ContradictionPair[] {
+  findContradictions(projectId: string, reader: ReaderContext = {}): ContradictionPair[] {
     const rows = this.db.instance
       .prepare(
         `SELECT
            ml.id as link_id, ml.created_at as link_created,
            ms.id as src_id, ms.content as src_content, ms.type as src_type,
-           mt.id as tgt_id, mt.content as tgt_content, mt.type as tgt_type
+           ms.visibility as src_visibility, ms.writer_agent_id as src_writer_agent_id,
+           ms.writer_team_id as src_writer_team_id, ms.restricted_readers as src_restricted_readers,
+           mt.id as tgt_id, mt.content as tgt_content, mt.type as tgt_type,
+           mt.visibility as tgt_visibility, mt.writer_agent_id as tgt_writer_agent_id,
+           mt.writer_team_id as tgt_writer_team_id, mt.restricted_readers as tgt_restricted_readers
          FROM memory_links ml
          JOIN memories ms ON ml.source_id = ms.id
          JOIN memories mt ON ml.target_id = mt.id
@@ -175,26 +219,59 @@ export class MemoryGraphService {
          ORDER BY ml.created_at DESC`
       )
       .all(projectId) as Array<{
-        link_id: string;
-        link_created: number;
-        src_id: string;
-        src_content: string;
-        src_type: string;
-        tgt_id: string;
-        tgt_content: string;
-        tgt_type: string;
-      }>;
+      link_id: string;
+      link_created: number;
+      src_id: string;
+      src_content: string;
+      src_type: string;
+      src_visibility: string | null;
+      src_writer_agent_id: string | null;
+      src_writer_team_id: string | null;
+      src_restricted_readers: string | null;
+      tgt_id: string;
+      tgt_content: string;
+      tgt_type: string;
+      tgt_visibility: string | null;
+      tgt_writer_agent_id: string | null;
+      tgt_writer_team_id: string | null;
+      tgt_restricted_readers: string | null;
+    }>;
 
-    return rows.map((r) => ({
-      linkId: r.link_id,
-      source: { id: r.src_id, content: r.src_content, type: r.src_type },
-      target: { id: r.tgt_id, content: r.tgt_content, type: r.tgt_type },
-      createdAt: new Date(r.link_created * 1000),
-    }));
+    return rows
+      .filter(
+        (r) =>
+          canReadMemory(
+            visibilityFieldsOf({
+              visibility: r.src_visibility,
+              writer_agent_id: r.src_writer_agent_id,
+              writer_team_id: r.src_writer_team_id,
+              restricted_readers: r.src_restricted_readers,
+            }),
+            reader
+          ) &&
+          canReadMemory(
+            visibilityFieldsOf({
+              visibility: r.tgt_visibility,
+              writer_agent_id: r.tgt_writer_agent_id,
+              writer_team_id: r.tgt_writer_team_id,
+              restricted_readers: r.tgt_restricted_readers,
+            }),
+            reader
+          )
+      )
+      .map((r) => ({
+        linkId: r.link_id,
+        source: { id: r.src_id, content: r.src_content, type: r.src_type },
+        target: { id: r.tgt_id, content: r.tgt_content, type: r.tgt_type },
+        createdAt: new Date(r.link_created * 1000),
+      }));
   }
 
   /**
-   * Find decision/derivation chain starting from a memory
+   * Find decision/derivation chain starting from a memory. If the seed
+   * itself isn't readable by `reader`, returns an empty chain (same shape
+   * as "not found") rather than leaking its content (T11.4). Traversal
+   * skips — and does not expand through — any hop the reader can't read.
    */
   findChain(
     startId: string,
@@ -203,7 +280,8 @@ export class MemoryGraphService {
       linkTypes?: string[];
       maxLength?: number;
       direction?: 'forward' | 'backward' | 'both';
-    } = {}
+    } = {},
+    reader: ReaderContext = {}
   ): MemoryChain {
     const linkTypes = options.linkTypes ?? ['extends', 'derived_from', 'supports'];
     const maxLength = options.maxLength ?? 10;
@@ -213,17 +291,19 @@ export class MemoryGraphService {
       .prepare('SELECT * FROM memories WHERE id = ? AND project_id = ?')
       .get(startId, projectId) as MemoryRow | undefined;
 
-    if (!startRow) {
+    if (!startRow || !canReadMemory(visibilityFieldsOf(startRow), reader)) {
       return { startId, nodes: [], length: 0 };
     }
 
-    const nodes: MemoryChain['nodes'] = [{
-      id: startRow.id,
-      content: startRow.content,
-      type: startRow.type,
-      linkType: 'start',
-      createdAt: new Date(startRow.created_at * 1000),
-    }];
+    const nodes: MemoryChain['nodes'] = [
+      {
+        id: startRow.id,
+        content: startRow.content,
+        type: startRow.type,
+        linkType: 'start',
+        createdAt: new Date(startRow.created_at * 1000),
+      },
+    ];
 
     const visited = new Set<string>([startId]);
     const queue: Array<{ id: string; depth: number }> = [{ id: startId, depth: 0 }];
@@ -236,9 +316,11 @@ export class MemoryGraphService {
       let sql: string;
       let params: unknown[];
 
+      const visCols = `m.visibility, m.writer_agent_id, m.writer_team_id, m.restricted_readers`;
+
       if (direction === 'forward') {
         sql = `
-          SELECT ml.link_type, ml.target_id as conn_id, m.content, m.type, m.created_at
+          SELECT ml.link_type, ml.target_id as conn_id, m.content, m.type, m.created_at, ${visCols}
           FROM memory_links ml
           JOIN memories m ON ml.target_id = m.id
           WHERE ml.source_id = ? AND m.project_id = ? AND m.deleted_at IS NULL
@@ -247,7 +329,7 @@ export class MemoryGraphService {
         params = [current.id, projectId, ...linkTypes];
       } else if (direction === 'backward') {
         sql = `
-          SELECT ml.link_type, ml.source_id as conn_id, m.content, m.type, m.created_at
+          SELECT ml.link_type, ml.source_id as conn_id, m.content, m.type, m.created_at, ${visCols}
           FROM memory_links ml
           JOIN memories m ON ml.source_id = m.id
           WHERE ml.target_id = ? AND m.project_id = ? AND m.deleted_at IS NULL
@@ -258,7 +340,7 @@ export class MemoryGraphService {
         sql = `
           SELECT ml.link_type,
                  CASE WHEN ml.source_id = ? THEN ml.target_id ELSE ml.source_id END as conn_id,
-                 m.content, m.type, m.created_at
+                 m.content, m.type, m.created_at, ${visCols}
           FROM memory_links ml
           JOIN memories m ON m.id = CASE WHEN ml.source_id = ? THEN ml.target_id ELSE ml.source_id END
           WHERE (ml.source_id = ? OR ml.target_id = ?)
@@ -274,11 +356,16 @@ export class MemoryGraphService {
         content: string;
         type: string;
         created_at: number;
+        visibility: string | null;
+        writer_agent_id: string | null;
+        writer_team_id: string | null;
+        restricted_readers: string | null;
       }>;
 
       for (const row of rows) {
         if (visited.has(row.conn_id)) continue;
         visited.add(row.conn_id);
+        if (!canReadMemory(visibilityFieldsOf(row), reader)) continue;
 
         nodes.push({
           id: row.conn_id,
@@ -298,12 +385,15 @@ export class MemoryGraphService {
   }
 
   /**
-   * Find cluster around a memory
+   * Find cluster around a memory. If the center itself isn't readable by
+   * `reader`, returns an empty cluster (same shape as "not found") rather
+   * than leaking centerContent (T11.4); unreadable members are dropped.
    */
   findCluster(
     centerId: string,
     projectId: string,
-    options: { maxSize?: number; maxDepth?: number } = {}
+    options: { maxSize?: number; maxDepth?: number } = {},
+    reader: ReaderContext = {}
   ): MemoryCluster {
     const maxSize = options.maxSize ?? 15;
     const maxDepth = options.maxDepth ?? 2;
@@ -312,7 +402,7 @@ export class MemoryGraphService {
       .prepare('SELECT * FROM memories WHERE id = ? AND project_id = ?')
       .get(centerId, projectId) as MemoryRow | undefined;
 
-    if (!centerRow) {
+    if (!centerRow || !canReadMemory(visibilityFieldsOf(centerRow), reader)) {
       return { centerId, centerContent: '', members: [], size: 0 };
     }
 
@@ -324,7 +414,7 @@ export class MemoryGraphService {
         .prepare('SELECT * FROM memories WHERE id = ? AND project_id = ? AND deleted_at IS NULL')
         .get(memoryId, projectId) as MemoryRow | undefined;
 
-      if (!row) continue;
+      if (!row || !canReadMemory(visibilityFieldsOf(row), reader)) continue;
 
       const link = this.db.instance
         .prepare(
@@ -344,7 +434,10 @@ export class MemoryGraphService {
 
     return {
       centerId,
-      centerContent: centerRow.content.length > 80 ? centerRow.content.substring(0, 80) + '...' : centerRow.content,
+      centerContent:
+        centerRow.content.length > 80
+          ? centerRow.content.substring(0, 80) + '...'
+          : centerRow.content,
       members,
       size: members.length + 1,
     };
@@ -353,12 +446,17 @@ export class MemoryGraphService {
   /**
    * Find orphan memories (no links)
    */
-  findOrphans(projectId: string, limit: number = 15): Array<{
+  findOrphans(
+    projectId: string,
+    limit: number = 15,
+    reader: ReaderContext = {}
+  ): Array<{
     id: string;
     content: string;
     type: string;
     createdAt: Date;
   }> {
+    const visibilityClause = buildVisibilityClause(reader, 'm');
     const rows = this.db.instance
       .prepare(
         `SELECT m.* FROM memories m
@@ -366,10 +464,11 @@ export class MemoryGraphService {
            AND NOT EXISTS (
              SELECT 1 FROM memory_links ml WHERE ml.source_id = m.id OR ml.target_id = m.id
            )
+           AND ${visibilityClause.sql}
          ORDER BY m.created_at DESC
          LIMIT ?`
       )
-      .all(projectId, limit) as MemoryRow[];
+      .all(projectId, ...visibilityClause.params, limit) as MemoryRow[];
 
     return rows.map((r) => ({
       id: r.id,

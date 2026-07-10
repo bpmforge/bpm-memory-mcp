@@ -3,7 +3,7 @@
  * Based on DATABASE.md specifications
  */
 
-export const CURRENT_VERSION = 12;
+export const CURRENT_VERSION = 13;
 
 /**
  * Initial schema - Version 1
@@ -443,6 +443,33 @@ export const MIGRATIONS: Array<{ version: number; up: string; down: string }> = 
     `,
     down: `
       DROP INDEX IF EXISTS idx_memories_quarantine;
+      -- Note: SQLite doesn't support DROP COLUMN directly
+    `,
+  },
+  // V13: Fleet scopes (T11.4). Which fleet agents/teams may read a memory,
+  // orthogonal to the existing project/global MemoryScope (which DB a memory
+  // lives in) and to quarantine (whether it's eligible for default recall at
+  // all). Defaults every row — existing and newly-inserted-without-opt-in —
+  // to 'global' so pre-T11.4 behavior (visible to any reader) is unchanged;
+  // enforcement (src/fleet/visibility.ts) only restricts reads once a caller
+  // explicitly opts a memory into 'agent_local' | 'team' | 'restricted'.
+  // restricted_readers is a JSON array of agent ids, only meaningful when
+  // visibility = 'restricted'.
+  {
+    version: 13,
+    up: `
+      ALTER TABLE memories ADD COLUMN visibility TEXT NOT NULL DEFAULT 'global' CHECK (
+        visibility IN ('agent_local', 'team', 'global', 'restricted')
+      );
+      ALTER TABLE memories ADD COLUMN writer_agent_id TEXT;
+      ALTER TABLE memories ADD COLUMN writer_team_id TEXT;
+      ALTER TABLE memories ADD COLUMN provenance TEXT;
+      ALTER TABLE memories ADD COLUMN restricted_readers TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_memories_visibility ON memories(project_id, visibility);
+    `,
+    down: `
+      DROP INDEX IF EXISTS idx_memories_visibility;
       -- Note: SQLite doesn't support DROP COLUMN directly
     `,
   },

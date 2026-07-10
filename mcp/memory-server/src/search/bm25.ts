@@ -1,5 +1,6 @@
 import type { DatabaseConnection } from '../storage/database.js';
 import type { Memory, MemorySearchResult, MemoryType, Language } from '../types.js';
+import { buildVisibilityClause } from '../fleet/visibility.js';
 
 /**
  * BM25 search using SQLite FTS5
@@ -23,6 +24,9 @@ export class BM25Search {
       includeSuperseded?: boolean;
       // V12 filter
       includeQuarantined?: boolean;
+      // V13 filter (fleet scopes — T11.4)
+      readerAgentId?: string;
+      readerTeamId?: string;
     } = {}
   ): MemorySearchResult[] {
     const limit = options.limit ?? 10;
@@ -73,6 +77,14 @@ export class BM25Search {
       sql += ' AND m.language = ?';
       params.push(options.language);
     }
+
+    // V13: fleet-scope visibility enforcement (T11.4)
+    const visibilityClause = buildVisibilityClause(
+      { agentId: options.readerAgentId, teamId: options.readerTeamId },
+      'm'
+    );
+    sql += ` AND ${visibilityClause.sql}`;
+    params.push(...visibilityClause.params);
 
     sql += ' ORDER BY bm25_score LIMIT ?';
     params.push(limit);
@@ -168,6 +180,12 @@ export class BM25Search {
       quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
       promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
       promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
+      // V13 fields
+      visibility: (row.visibility as Memory['visibility']) ?? 'global',
+      writerAgentId: row.writer_agent_id ?? null,
+      writerTeamId: row.writer_team_id ?? null,
+      provenance: row.provenance ?? null,
+      restrictedReaders: row.restricted_readers ? JSON.parse(row.restricted_readers) : null,
     };
   }
 }
@@ -218,4 +236,10 @@ interface MemoryRow {
   quarantined_at?: number | null;
   promoted_at?: number | null;
   promotion_reason?: string | null;
+  // V13 columns
+  visibility?: string | null;
+  writer_agent_id?: string | null;
+  writer_team_id?: string | null;
+  provenance?: string | null;
+  restricted_readers?: string | null;
 }

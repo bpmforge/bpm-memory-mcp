@@ -49,6 +49,7 @@ import {
   type PromotionReason,
 } from './types.js';
 import { findCorroboratingMemory, buildCorroborationCandidates } from './quarantine/index.js';
+import { buildVisibilityClause, canReadMemory, type ReaderContext } from './fleet/visibility.js';
 import { GoalRepository } from './goals/index.js';
 import { calculateDriftIndicator, getDriftWarningMessage } from './goals/drift.js';
 import { MemoryLinkRepository } from './storage/links.js';
@@ -939,6 +940,12 @@ function createServer(): Server {
     const projectRoot = process.env.CLAUDE_PROJECT_ROOT ?? process.cwd();
     const projectId = getProjectId(projectRoot);
 
+    // V13: fleet-scope identity (T11.4) — per-process defaults so callers
+    // don't have to pass writerAgentId/readerAgentId on every single call.
+    // Explicit tool args (checked below) always take precedence.
+    const envAgentId = process.env.MEMORY_AGENT_ID || undefined;
+    const envTeamId = process.env.MEMORY_TEAM_ID || undefined;
+
     await initializeForProject(projectId);
 
     if (!embeddingService || !hybridSearch || !memoryRepository) {
@@ -952,6 +959,37 @@ function createServer(): Server {
       switch (name) {
         case 'memory_store': {
           const input = MemoryStoreInputSchema.parse(args);
+
+          // V13: Fleet scopes (T11.4). Leaving visibility unset keeps the
+          // pre-T11.4 behavior untouched. Once set explicitly, writer
+          // identity is required (arg or MEMORY_AGENT_ID env); provenance
+          // is additionally required for every tier except 'agent_local'.
+          const effectiveWriterAgentId = input.writerAgentId ?? envAgentId ?? null;
+          const effectiveWriterTeamId = input.writerTeamId ?? envTeamId ?? null;
+          if (input.visibility) {
+            if (!effectiveWriterAgentId) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Error: writerAgentId is required (arg or MEMORY_AGENT_ID env) when visibility is '${input.visibility}'.`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            if (input.visibility !== 'agent_local' && !input.provenance) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Error: provenance is required when visibility is '${input.visibility}'.`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+          }
 
           // V6: Determine scope - use global or project services
           const isGlobal = input.scope === MemoryScope.GLOBAL;
@@ -1039,6 +1077,12 @@ function createServer(): Server {
             projectId: targetProjectId,
           };
           if (input.citation) memoryInput.citation = input.citation;
+          // V13: Fleet scopes (T11.4)
+          if (input.visibility) memoryInput.visibility = input.visibility;
+          if (effectiveWriterAgentId) memoryInput.writerAgentId = effectiveWriterAgentId;
+          if (effectiveWriterTeamId) memoryInput.writerTeamId = effectiveWriterTeamId;
+          if (input.provenance) memoryInput.provenance = input.provenance;
+          if (input.restrictedReaders) memoryInput.restrictedReaders = input.restrictedReaders;
           // V2 fields (language and codeContext auto-detected in repository if not provided)
           if (input.language) memoryInput.language = input.language;
           if (input.codeContext) {
@@ -1189,6 +1233,12 @@ function createServer(): Server {
           };
           if (input.type) baseOptions.type = input.type;
           if (input.language) baseOptions.language = input.language;
+          // V13: fleet-scope reader identity (T11.4) — enforced at the SQL
+          // layer inside HybridSearch/BM25Search for every branch below.
+          const recallReaderAgentId = input.readerAgentId ?? envAgentId;
+          const recallReaderTeamId = input.readerTeamId ?? envTeamId;
+          if (recallReaderAgentId) baseOptions.readerAgentId = recallReaderAgentId;
+          if (recallReaderTeamId) baseOptions.readerTeamId = recallReaderTeamId;
 
           // Collect results from scopes
           type MemoryResult = {
@@ -1889,8 +1939,10 @@ function createServer(): Server {
           } | null = null;
 
           if (memoryGraphService && !HARDENING_DISABLED) {
-            const graphStats = memoryGraphService.getStats(projectId);
-            const contradictions = memoryGraphService.findContradictions(projectId);
+            // V13: fleet-scope reader identity (T11.4)
+            const restoreReader: ReaderContext = { agentId: envAgentId, teamId: envTeamId };
+            const graphStats = memoryGraphService.getStats(projectId, restoreReader);
+            const contradictions = memoryGraphService.findContradictions(projectId, restoreReader);
             const checkpoints =
               checkpointRepository?.listCheckpoints(projectId, { limit: 5 }) ?? [];
             const incompleteCheckpoints = checkpoints
@@ -2171,6 +2223,13 @@ function createServer(): Server {
 
           const input = MemoryLinkInputSchema.parse(args);
 
+          // V13: fleet-scope reader identity (T11.4), enforced below in
+          // every action that returns memory content.
+          const linkReader: ReaderContext = {
+            agentId: input.readerAgentId ?? envAgentId,
+            teamId: input.readerTeamId ?? envTeamId,
+          };
+
           switch (input.action) {
             case 'create': {
               if (!input.sourceId || !input.targetId || !input.linkType) {
@@ -2273,7 +2332,7 @@ function createServer(): Server {
               const relatedMemories = linkedIds
                 .map(({ memoryId, distance, linkStrength }) => {
                   const memory = memoryRepository!.findById(memoryId, projectId);
-                  if (!memory) return null;
+                  if (!memory || !canReadMemory(memory, linkReader)) return null;
                   return {
                     id: memory.id,
                     content: memory.content,
@@ -2342,7 +2401,7 @@ function createServer(): Server {
                 };
               }
 
-              const stats = memoryGraphService.getStats(projectId);
+              const stats = memoryGraphService.getStats(projectId, linkReader);
 
               return {
                 content: [
@@ -2365,7 +2424,7 @@ function createServer(): Server {
                 };
               }
 
-              const contradictions = memoryGraphService.findContradictions(projectId);
+              const contradictions = memoryGraphService.findContradictions(projectId, linkReader);
 
               return {
                 content: [
@@ -2416,7 +2475,12 @@ function createServer(): Server {
               if (input.direction)
                 chainOptions.direction = input.direction as 'forward' | 'backward' | 'both';
 
-              const chain = memoryGraphService.findChain(input.memoryId, projectId, chainOptions);
+              const chain = memoryGraphService.findChain(
+                input.memoryId,
+                projectId,
+                chainOptions,
+                linkReader
+              );
 
               return {
                 content: [
@@ -2466,7 +2530,8 @@ function createServer(): Server {
               const cluster = memoryGraphService.findCluster(
                 input.memoryId,
                 projectId,
-                clusterOptions
+                clusterOptions,
+                linkReader
               );
 
               return {
@@ -2496,7 +2561,7 @@ function createServer(): Server {
                 };
               }
 
-              const orphans = memoryGraphService.findOrphans(projectId);
+              const orphans = memoryGraphService.findOrphans(projectId, 15, linkReader);
 
               return {
                 content: [
@@ -2628,9 +2693,11 @@ function createServer(): Server {
                 };
               }
 
-              // Get memories linked to these entities
+              // Get memories linked to these entities. V13: fleet-scope
+              // visibility enforcement (T11.4).
               const entityIds = matchingEntities.map((e) => e.id);
               const placeholders = entityIds.map(() => '?').join(',');
+              const entityVisibilityClause = buildVisibilityClause(linkReader, 'm');
               const memoryRows = db.instance
                 .prepare(
                   `SELECT DISTINCT m.id, m.content, m.type, mel.entity_id
@@ -2638,10 +2705,11 @@ function createServer(): Server {
                    JOIN memories m ON mel.memory_id = m.id
                    WHERE mel.entity_id IN (${placeholders})
                      AND m.deleted_at IS NULL
+                     AND ${entityVisibilityClause.sql}
                    ORDER BY m.created_at DESC
                    LIMIT 20`
                 )
-                .all(...entityIds) as Array<{
+                .all(...entityIds, ...entityVisibilityClause.params) as Array<{
                 id: string;
                 content: string;
                 type: string;
@@ -3070,12 +3138,28 @@ function createServer(): Server {
 
         // V9: Proactive context assembly (V12: with token budget support)
         case 'memory_context_assemble': {
-          const { task, files, includeGlobal, maxMemories, tokenBudget } = args as {
+          const {
+            task,
+            files,
+            includeGlobal,
+            maxMemories,
+            tokenBudget,
+            readerAgentId,
+            readerTeamId,
+          } = args as {
             task: string;
             files?: string[];
             includeGlobal?: boolean;
             maxMemories?: number;
             tokenBudget?: number;
+            // V13: fleet-scope reader identity (T11.4)
+            readerAgentId?: string;
+            readerTeamId?: string;
+          };
+          // V13: fleet-scope reader identity (T11.4)
+          const assembleReader: ReaderContext = {
+            agentId: readerAgentId ?? envAgentId,
+            teamId: readerTeamId ?? envTeamId,
           };
 
           if (!task) {
@@ -3114,6 +3198,8 @@ function createServer(): Server {
             projectId,
             limit: limit,
             minConfidence: 0.3,
+            ...(assembleReader.agentId ? { readerAgentId: assembleReader.agentId } : {}),
+            ...(assembleReader.teamId ? { readerTeamId: assembleReader.teamId } : {}),
           };
           const response = await hybridSearch.search(query, searchOptions);
 
@@ -3136,6 +3222,8 @@ function createServer(): Server {
                 projectId: GLOBAL_PROJECT_ID,
                 limit: Math.ceil(limit / 3),
                 minConfidence: 0.3,
+                ...(assembleReader.agentId ? { readerAgentId: assembleReader.agentId } : {}),
+                ...(assembleReader.teamId ? { readerTeamId: assembleReader.teamId } : {}),
               };
               const globalResponse = await globalServices.hybridSearch.search(
                 query,
@@ -3178,7 +3266,10 @@ function createServer(): Server {
 
           // Check for contradictions among top memories
           if (memoryGraphService && topMemories.length > 1) {
-            const allContradictions = memoryGraphService.findContradictions(projectId);
+            const allContradictions = memoryGraphService.findContradictions(
+              projectId,
+              assembleReader
+            );
             const topIds = new Set(topMemories.map((m) => m.id));
 
             for (const c of allContradictions) {
@@ -3466,6 +3557,34 @@ function createServer(): Server {
         case 'fact_store': {
           const input = FactStoreInputSchema.parse(args);
 
+          // V13: Fleet scopes (T11.4) — same rule as memory_store.
+          const effectiveWriterAgentId = input.writerAgentId ?? envAgentId ?? null;
+          const effectiveWriterTeamId = input.writerTeamId ?? envTeamId ?? null;
+          if (input.visibility) {
+            if (!effectiveWriterAgentId) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Error: writerAgentId is required (arg or MEMORY_AGENT_ID env) when visibility is '${input.visibility}'.`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            if (input.visibility !== 'agent_local' && !input.provenance) {
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Error: provenance is required when visibility is '${input.visibility}'.`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+          }
+
           // Determine scope
           const isGlobal = input.scope === MemoryScope.GLOBAL;
           const targetProjectId = isGlobal ? GLOBAL_PROJECT_ID : projectId;
@@ -3524,6 +3643,12 @@ function createServer(): Server {
             citation: input.sourceUrl,
             quarantine: true,
           };
+          // V13: Fleet scopes (T11.4)
+          if (input.visibility) memoryInput.visibility = input.visibility;
+          if (effectiveWriterAgentId) memoryInput.writerAgentId = effectiveWriterAgentId;
+          if (effectiveWriterTeamId) memoryInput.writerTeamId = effectiveWriterTeamId;
+          if (input.provenance) memoryInput.provenance = input.provenance;
+          if (input.restrictedReaders) memoryInput.restrictedReaders = input.restrictedReaders;
 
           // Contradiction detection
           let contradictionWarning: {
@@ -3682,6 +3807,10 @@ function createServer(): Server {
           // Determine search scope
           const searchProjectId = input.scope === 'global' ? GLOBAL_PROJECT_ID : projectId;
 
+          // V13: fleet-scope reader identity (T11.4)
+          const factReaderAgentId = input.readerAgentId ?? envAgentId;
+          const factReaderTeamId = input.readerTeamId ?? envTeamId;
+
           // Use hybrid search to find relevant facts
           const searchOptions: SearchOptions = {
             projectId: searchProjectId,
@@ -3690,6 +3819,8 @@ function createServer(): Server {
             minConfidence: input.minConfidence,
             includeStale: input.includeStale,
             includeQuarantined: input.includeQuarantined,
+            ...(factReaderAgentId ? { readerAgentId: factReaderAgentId } : {}),
+            ...(factReaderTeamId ? { readerTeamId: factReaderTeamId } : {}),
           };
 
           const results = await hybridSearch.search(input.query, searchOptions);
