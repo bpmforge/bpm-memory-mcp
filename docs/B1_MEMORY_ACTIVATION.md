@@ -66,13 +66,52 @@ bi-temporal" lever from the *bridging-the-frontier-gap* research book in
   auto-resolution *links*, it does NOT auto-supersede/delete — deciding which
   fact wins is destructive and stays advisory (the `ContradictionDetector`'s
   `update` suggestedAction surfaces it for a human). 300 total green.
+- **Slice 6 — run log (T2.1) `[DONE]`**: two of T2.1's three parts were already
+  built by slice 2/3 above — `dryRun` report mode exists at both the service
+  (`consolidation/index.ts`) and CLI (`cli.ts consolidate --dry-run`) layers,
+  and the `memory_consolidate` MCP tool already exposes `dryRun` in its input
+  schema (`index.ts`). Verified live post-build:
+  `node mcp/memory-server/dist/cli.js consolidate --dry-run` prints
+  `[DRY RUN] ...` and confirmed no writes. The real gap was the log appender:
+  added `consolidation/run-log.ts` (`appendConsolidationLog`, JSONL, never
+  throws) and wired it into `ConsolidationScheduler.maybeRun()` — one line per
+  *attempted* autonomous run (`'ok'`/`'error'`; not `'disabled'`/`'throttled'`,
+  which never touch the database). Default path
+  `~/.claude-memory/logs/consolidation.log`, overridable via
+  `CLAUDE_MEMORY_CONSOLIDATION_LOG_PATH`. 8 new tests (315 total green).
+  **Env enable**: this repo carries no host config files — `env` is set per
+  host wherever the MCP server is registered (e.g.
+  `claude mcp add memory ... -e CLAUDE_MEMORY_SLEEP_CONSOLIDATION=true`), which
+  is outside this repo's write scope. To enable on a host:
+  `CLAUDE_MEMORY_SLEEP_CONSOLIDATION=true` (required),
+  `CLAUDE_MEMORY_CONSOLIDATION_INTERVAL_HOURS=24` (optional, default 24),
+  `CLAUDE_MEMORY_CONSOLIDATION_LOG_PATH=...` (optional, default above). It then
+  fires automatically at the next `session_save` past the throttle interval —
+  no separate cron/daemon needed.
+  **Acceptance gap, honestly stated**: the ticket's "3 consecutive daily logged
+  runs" bar needs real elapsed calendar days on a live host, and the ticket
+  itself notes `.48` (the originally-named host) is unreachable pending H-5
+  (host/network re-map, still `blocked(Brad decides LM topology)` as of
+  2026-07-09). That part is **not verified here** — it can't be, in one
+  session, on an unresolved host. What *is* verified: the appender is called
+  on every attempted scheduler run (unit-tested), and a deterministic test
+  (`logs 3 consecutive daily-throttled runs as 3 distinct lines`) simulates 3
+  throttle-interval-elapsed runs by backdating `consolidation_runs.last_run_at`
+  — same technique as the pre-existing "runs again once the interval has
+  elapsed" test — and asserts 3 JSONL lines land. A manual end-to-end run
+  against a real (non-`:memory:`) sqlite db post-`npm run build` also produced
+  a real log line at the default path (see PR evidence). Once H-5 lands and a
+  host is chosen, the remaining acceptance step is operational: enable the env
+  var there and let 3 real `session_save` calls happen across days.
 
-## Status: B1 memory-activation slices 1–5 complete
+## Status: B1 memory-activation slices 1–6 complete
 
-The "activate, don't rebuild" thesis held: of the five slices, **two were real
+The "activate, don't rebuild" thesis held: of the six slices, **two were real
 bugs** (consolidation was DOA + over-decaying), **two activated dormant code**
-(persist summaries, expose history), and **one was already built** (contradiction
-linking) — its gap was only a missing test. No graph was rebuilt.
+(persist summaries, expose history), **one was already built** (contradiction
+linking, missing only a test), and **one (T2.1) was two-thirds already built**
+(dry-run report mode) with the log appender as the real remaining gap. No
+graph was rebuilt.
 
 ## Notes
 - `npm run lint` is broken repo-wide (missing `typescript-eslint` dep in
