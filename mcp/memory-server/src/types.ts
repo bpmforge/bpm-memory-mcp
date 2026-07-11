@@ -78,6 +78,13 @@ export type Volatility = 'static' | 'slow' | 'volatile';
 // V12: why a quarantined memory was promoted back into default recall (T11.3).
 export type PromotionReason = 'corroboration' | 'human_touch';
 
+// V13: fleet-visibility tiers (T11.4). Orthogonal to MemoryScope (which DB a
+// memory lives in) and to quarantine (recall eligibility). Controls which
+// fleet agents/teams may read a memory once a caller opts in explicitly —
+// see src/fleet/visibility.ts for enforcement and MemoryStoreInputSchema for
+// the writer-identity/provenance requirement on non-default tiers.
+export type MemoryVisibility = 'agent_local' | 'team' | 'global' | 'restricted';
+
 export enum SymbolType {
   FUNCTION = 'function',
   CLASS = 'class',
@@ -239,6 +246,16 @@ export interface Memory {
   quarantinedAt: Date | null;
   promotedAt: Date | null;
   promotionReason: PromotionReason | null;
+  // V13 fields (fleet scopes — T11.4). visibility defaults to 'global' (see
+  // schema V13) so pre-existing/opted-out memories behave exactly as
+  // before. writerAgentId/writerTeamId/provenance are the accountability
+  // trail required once a caller explicitly requests a non-default tier.
+  // restrictedReaders is the explicit reader allowlist for 'restricted'.
+  visibility: MemoryVisibility;
+  writerAgentId: string | null;
+  writerTeamId: string | null;
+  provenance: string | null;
+  restrictedReaders: string[] | null;
 }
 
 export interface MemoryFeedback {
@@ -264,6 +281,13 @@ export interface MemoryCreateInput {
   // V12: create this memory already quarantined (T11.3 — used by fact_store
   // for web-derived auto-extracts).
   quarantine?: boolean;
+  // V13: fleet scopes (T11.4). Omit visibility to keep the pre-T11.4
+  // 'global' default.
+  visibility?: MemoryVisibility;
+  writerAgentId?: string;
+  writerTeamId?: string;
+  provenance?: string;
+  restrictedReaders?: string[];
 }
 
 export interface MemorySearchResult {
@@ -295,6 +319,11 @@ export interface SearchOptions {
   includeSuperseded?: boolean;
   // V12: exclude quarantined memories by default (T11.3).
   includeQuarantined?: boolean;
+  // V13: fleet-scope reader identity (T11.4) — used to enforce visibility
+  // at the SQL layer (search/index.ts, search/bm25.ts). Omitting both means
+  // the reader only sees 'global'-visibility memories.
+  readerAgentId?: string;
+  readerTeamId?: string;
 }
 
 // ============================================================================
@@ -422,6 +451,7 @@ export const SymbolTypeSchema = z.nativeEnum(SymbolType);
 export const MemoryLinkTypeSchema = z.nativeEnum(MemoryLinkType);
 export const GoalStatusSchema = z.nativeEnum(GoalStatus);
 export const MemoryScopeSchema = z.nativeEnum(MemoryScope);
+export const MemoryVisibilitySchema = z.enum(['agent_local', 'team', 'global', 'restricted']);
 
 export const LanguageSchema = z.enum([
   'typescript',
@@ -451,17 +481,48 @@ export const CodeContextSchema = z.object({
   sourceHash: z.string().optional(),
 });
 
-export const MemoryStoreInputSchema = z.object({
-  content: z.string().min(1).max(50000),
-  type: MemoryTypeSchema.optional().default(MemoryType.FACT),
-  confidence: z.number().min(0).max(1).optional().default(1.0),
-  citation: z.string().optional(),
-  // V2 fields
-  language: LanguageSchema.optional(),
-  codeContext: CodeContextSchema.optional(),
-  // V6: Global memory support
-  scope: MemoryScopeSchema.optional().default(MemoryScope.PROJECT),
-});
+export const MemoryStoreInputSchema = z
+  .object({
+    content: z.string().min(1).max(50000),
+    type: MemoryTypeSchema.optional().default(MemoryType.FACT),
+    confidence: z.number().min(0).max(1).optional().default(1.0),
+    citation: z.string().optional(),
+    // V2 fields
+    language: LanguageSchema.optional(),
+    codeContext: CodeContextSchema.optional(),
+    // V6: Global memory support
+    scope: MemoryScopeSchema.optional().default(MemoryScope.PROJECT),
+    // V13: Fleet scopes (T11.4). Leave visibility unset to keep the
+    // pre-T11.4 behavior unchanged (stored + readable exactly as before).
+    // Once set explicitly, writer identity is required (resolved from
+    // writerAgentId or the MEMORY_AGENT_ID env var — checked in the
+    // handler, not here); provenance is additionally required for every
+    // tier except 'agent_local' (the "team+" tiers: team/global/restricted).
+    visibility: MemoryVisibilitySchema.optional(),
+    writerAgentId: z.string().min(1).max(200).optional(),
+    writerTeamId: z.string().min(1).max(200).optional(),
+    provenance: z.string().min(1).max(2000).optional(),
+    restrictedReaders: z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.visibility === 'team' && !val.writerTeamId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['writerTeamId'],
+        message: "writerTeamId is required when visibility is 'team'",
+      });
+    }
+    if (
+      val.visibility === 'restricted' &&
+      (!val.restrictedReaders || val.restrictedReaders.length === 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['restrictedReaders'],
+        message: "restrictedReaders (non-empty) is required when visibility is 'restricted'",
+      });
+    }
+  });
 
 export const MemoryRecallInputSchema = z.object({
   query: z.string().min(1).max(1000),
@@ -477,6 +538,10 @@ export const MemoryRecallInputSchema = z.object({
   scope: z.enum(['project', 'global', 'both', 'all']).optional().default('both'),
   // V12: quarantined memories (web-derived, unpromoted) are excluded by default (T11.3)
   includeQuarantined: z.boolean().optional().default(false),
+  // V13: fleet-scope reader identity (T11.4) — falls back to MEMORY_AGENT_ID
+  // / MEMORY_TEAM_ID env vars in the handler if omitted.
+  readerAgentId: z.string().min(1).max(200).optional(),
+  readerTeamId: z.string().min(1).max(200).optional(),
 });
 
 export const MemoryForgetInputSchema = z.object({
@@ -490,6 +555,10 @@ export const MemoryUpdateInputSchema = z.object({
   // V2 optional updates
   language: LanguageSchema.optional(),
   codeContext: CodeContextSchema.optional(),
+  // V13: fleet-scope reader identity (T11.4) — the caller must be able to
+  // read the memory it's superseding.
+  readerAgentId: z.string().min(1).max(200).optional(),
+  readerTeamId: z.string().min(1).max(200).optional(),
 });
 
 export const MemoryFeedbackInputSchema = z.object({
@@ -497,6 +566,10 @@ export const MemoryFeedbackInputSchema = z.object({
   feedback: FeedbackTypeSchema,
   correction: z.string().max(50000).optional(),
   duplicateOf: z.string().uuid().optional(),
+  // V13: fleet-scope reader identity (T11.4) — the caller must be able to
+  // read the memory it's giving feedback on.
+  readerAgentId: z.string().min(1).max(200).optional(),
+  readerTeamId: z.string().min(1).max(200).optional(),
 });
 
 export const SessionSaveInputSchema = z.object({
@@ -547,6 +620,11 @@ export const MemoryLinkInputSchema = z.object({
   // V11: Entity query options
   entityName: z.string().optional(), // For find_by_entity
   entityType: z.enum(['file', 'function', 'type', 'decision', 'error']).optional(), // For find_by_entity
+  // V13: fleet-scope reader identity (T11.4), applied to every action that
+  // returns memory content (find_related, find_chain, find_cluster,
+  // find_orphans, find_contradictions, find_by_entity, get_stats).
+  readerAgentId: z.string().min(1).max(200).optional(),
+  readerTeamId: z.string().min(1).max(200).optional(),
 });
 
 export const CheckpointTaskInputSchema = z.object({
@@ -561,23 +639,53 @@ export const CheckpointTaskInputSchema = z.object({
 // V9: Fact Store schemas
 export const SourceTypeSchema = z.nativeEnum(SourceType);
 
-export const FactStoreInputSchema = z.object({
-  claim: z.string().min(1).max(5000).describe('A clear, specific factual claim'),
-  directQuote: z.string().min(1).max(5000).describe('Exact text from source supporting the claim'),
-  sourceUrl: z.string().url().describe('URL of the source'),
-  sourceTitle: z.string().min(1).max(500).describe('Title of the source page/document'),
-  sourceType: SourceTypeSchema.optional().default(SourceType.UNKNOWN),
-  confidence: z.number().min(0).max(1).optional().default(0.6),
-  domainTags: z.array(z.string().max(50)).max(20).optional().default([]),
-  staleAfterDays: z
-    .number()
-    .int()
-    .min(1)
-    .optional()
-    .describe('Days until this fact should be re-verified'),
-  extractedBy: z.string().max(100).optional().default('research-agent'),
-  scope: MemoryScopeSchema.optional().default(MemoryScope.PROJECT),
-});
+export const FactStoreInputSchema = z
+  .object({
+    claim: z.string().min(1).max(5000).describe('A clear, specific factual claim'),
+    directQuote: z
+      .string()
+      .min(1)
+      .max(5000)
+      .describe('Exact text from source supporting the claim'),
+    sourceUrl: z.string().url().describe('URL of the source'),
+    sourceTitle: z.string().min(1).max(500).describe('Title of the source page/document'),
+    sourceType: SourceTypeSchema.optional().default(SourceType.UNKNOWN),
+    confidence: z.number().min(0).max(1).optional().default(0.6),
+    domainTags: z.array(z.string().max(50)).max(20).optional().default([]),
+    staleAfterDays: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('Days until this fact should be re-verified'),
+    extractedBy: z.string().max(100).optional().default('research-agent'),
+    scope: MemoryScopeSchema.optional().default(MemoryScope.PROJECT),
+    // V13: Fleet scopes (T11.4) — same rules as MemoryStoreInputSchema.
+    visibility: MemoryVisibilitySchema.optional(),
+    writerAgentId: z.string().min(1).max(200).optional(),
+    writerTeamId: z.string().min(1).max(200).optional(),
+    provenance: z.string().min(1).max(2000).optional(),
+    restrictedReaders: z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.visibility === 'team' && !val.writerTeamId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['writerTeamId'],
+        message: "writerTeamId is required when visibility is 'team'",
+      });
+    }
+    if (
+      val.visibility === 'restricted' &&
+      (!val.restrictedReaders || val.restrictedReaders.length === 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['restrictedReaders'],
+        message: "restrictedReaders (non-empty) is required when visibility is 'restricted'",
+      });
+    }
+  });
 
 export const FactQueryInputSchema = z.object({
   query: z.string().min(1).max(1000).describe('Semantic search query'),
@@ -598,6 +706,9 @@ export const FactQueryInputSchema = z.object({
   scope: z.enum(['project', 'global', 'both']).optional().default('both'),
   // V12: quarantined facts (single-source, unpromoted) are excluded by default (T11.3)
   includeQuarantined: z.boolean().optional().default(false),
+  // V13: fleet-scope reader identity (T11.4).
+  readerAgentId: z.string().min(1).max(200).optional(),
+  readerTeamId: z.string().min(1).max(200).optional(),
 });
 
 // Type exports from Zod schemas

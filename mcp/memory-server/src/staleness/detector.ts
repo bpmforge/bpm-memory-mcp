@@ -53,6 +53,12 @@ interface MemoryRow {
   quarantined_at?: number | null;
   promoted_at?: number | null;
   promotion_reason?: string | null;
+  // V13 columns
+  visibility?: string | null;
+  writer_agent_id?: string | null;
+  writer_team_id?: string | null;
+  provenance?: string | null;
+  restricted_readers?: string | null;
 }
 
 /**
@@ -272,6 +278,12 @@ export class StalenessDetector {
       quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
       promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
       promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
+      // V13 fields
+      visibility: (row.visibility as Memory['visibility']) ?? 'global',
+      writerAgentId: row.writer_agent_id ?? null,
+      writerTeamId: row.writer_team_id ?? null,
+      provenance: row.provenance ?? null,
+      restrictedReaders: row.restricted_readers ? JSON.parse(row.restricted_readers) : null,
     };
   }
 }

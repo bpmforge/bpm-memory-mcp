@@ -12,6 +12,7 @@ import { BM25Search } from './bm25.js';
 import { rrfFusion, rrfFusionWithLinks, interleave } from './rrf.js';
 import { applyVolatilityStaleness } from './volatility-staleness.js';
 import { MemoryLinkRepository } from '../storage/links.js';
+import { buildVisibilityClause, canReadMemory } from '../fleet/visibility.js';
 
 export { VectorSearch, cosineSimilarity, normalizeVector } from './vector.js';
 export { BM25Search } from './bm25.js';
@@ -183,6 +184,14 @@ export class HybridSearch {
       params.push(options.language);
     }
 
+    // V13: fleet-scope visibility enforcement (T11.4)
+    const visibilityClause = buildVisibilityClause({
+      agentId: options.readerAgentId,
+      teamId: options.readerTeamId,
+    });
+    sql += ` AND ${visibilityClause.sql}`;
+    params.push(...visibilityClause.params);
+
     const rows = this.db.instance.prepare(sql).all(...params) as MemoryRow[];
     const memories = rows.map((row) => this.rowToMemory(row));
 
@@ -199,12 +208,16 @@ export class HybridSearch {
       type?: MemoryType;
       minConfidence?: number;
       includeQuarantined?: boolean;
+      readerAgentId?: string;
+      readerTeamId?: string;
     } = {
       limit: (options.limit ?? 10) * 2,
       includeQuarantined: options.includeQuarantined ?? false,
     };
     if (options.type) bm25Options.type = options.type;
     if (options.minConfidence !== undefined) bm25Options.minConfidence = options.minConfidence;
+    if (options.readerAgentId) bm25Options.readerAgentId = options.readerAgentId;
+    if (options.readerTeamId) bm25Options.readerTeamId = options.readerTeamId;
 
     return this.bm25Search.search(query, options.projectId, bm25Options);
   }
@@ -251,6 +264,10 @@ export class HybridSearch {
         if (!options.includeStale && memory.flaggedAt) continue;
         if (!options.includeQuarantined && memory.quarantinedAt) continue;
         if (options.language && memory.language !== options.language) continue;
+        if (
+          !canReadMemory(memory, { agentId: options.readerAgentId, teamId: options.readerTeamId })
+        )
+          continue;
 
         // Calculate score: linkStrength * distance_decay^distance
         const score = linkStrength * Math.pow(DISTANCE_DECAY, distance);
@@ -316,6 +333,12 @@ export class HybridSearch {
       quarantinedAt: row.quarantined_at ? new Date(row.quarantined_at * 1000) : null,
       promotedAt: row.promoted_at ? new Date(row.promoted_at * 1000) : null,
       promotionReason: (row.promotion_reason as Memory['promotionReason']) ?? null,
+      // V13 fields
+      visibility: (row.visibility as Memory['visibility']) ?? 'global',
+      writerAgentId: row.writer_agent_id ?? null,
+      writerTeamId: row.writer_team_id ?? null,
+      provenance: row.provenance ?? null,
+      restrictedReaders: row.restricted_readers ? JSON.parse(row.restricted_readers) : null,
     };
   }
 }
@@ -366,4 +389,10 @@ interface MemoryRow {
   quarantined_at?: number | null;
   promoted_at?: number | null;
   promotion_reason?: string | null;
+  // V13 columns
+  visibility?: string | null;
+  writer_agent_id?: string | null;
+  writer_team_id?: string | null;
+  provenance?: string | null;
+  restricted_readers?: string | null;
 }

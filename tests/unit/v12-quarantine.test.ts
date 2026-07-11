@@ -50,8 +50,12 @@ describe('V12 migration — quarantine + promotion fields', () => {
     db.close();
   });
 
-  it('CURRENT_VERSION is 12', () => {
-    expect(CURRENT_VERSION).toBe(12);
+  it('V12 migration is present and current schema is at least V12', () => {
+    // T11.4 (V13, fleet scopes) landed on top of this migration, so
+    // CURRENT_VERSION has moved past 12 — assert the V12 migration itself
+    // is still registered rather than pinning the overall schema version.
+    expect(MIGRATIONS.some((m) => m.version === 12)).toBe(true);
+    expect(CURRENT_VERSION).toBeGreaterThanOrEqual(12);
   });
 
   it('applies cleanly on top of a fresh V11 database', () => {
@@ -66,7 +70,7 @@ describe('V12 migration — quarantine + promotion fields', () => {
     const version = db.instance
       .prepare('SELECT MAX(version) as version FROM schema_version')
       .get() as { version: number };
-    expect(version.version).toBe(12);
+    expect(version.version).toBe(CURRENT_VERSION);
   });
 
   it('new rows default to un-quarantined (quarantined_at NULL)', () => {
