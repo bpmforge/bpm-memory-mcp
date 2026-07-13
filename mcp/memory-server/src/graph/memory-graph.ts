@@ -1,7 +1,8 @@
 import type { DatabaseConnection } from '../storage/database.js';
-import type { MemoryLink, MemoryVisibility } from '../types.js';
+import type { MemoryLink, MemoryVisibility, Volatility } from '../types.js';
 import { MemoryLinkRepository } from '../storage/links.js';
 import { buildVisibilityClause, canReadMemory, type ReaderContext } from '../fleet/visibility.js';
+import { volatilityMultiplier } from '../search/volatility-staleness.js';
 
 /**
  * Graph statistics for memory links
@@ -45,6 +46,38 @@ export interface MemoryChain {
     createdAt: Date;
   }>;
   length: number;
+}
+
+/**
+ * One node in a graph_expand chain (T11.5). depth 0 = an RRF seed;
+ * depth 1-2 = reached by hopping a typed link from a shallower node.
+ */
+export interface GraphExpandNode {
+  id: string;
+  content: string;
+  type: string;
+  linkType: string;
+  depth: number;
+  createdAt: Date;
+}
+
+/** Which side of a `contradicts` pair the graph_expand chain judges as current. */
+export interface SupersessionVerdict {
+  winnerId: string | null;
+  reason: 'superseded_version' | 'fresher' | 'higher_confidence' | 'unresolved';
+}
+
+/** A `contradicts` edge touching the chain, with both sides + a verdict (T11.5). */
+export interface ChainContradiction {
+  linkId: string;
+  a: { id: string; content: string; type: string };
+  b: { id: string; content: string; type: string };
+  verdict: SupersessionVerdict;
+}
+
+export interface GraphExpandResult {
+  nodes: GraphExpandNode[];
+  contradictions: ChainContradiction[];
 }
 
 /**
@@ -382,6 +415,292 @@ export class MemoryGraphService {
     nodes.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
     return { startId, nodes, length: nodes.length };
+  }
+
+  /**
+   * graph_expand chain recall (T11.5). Starting from a set of RRF seed
+   * memories (the caller's already-ranked top-K search hits), hops up to
+   * `maxHops` (capped at 2) over typed "chain" links — default
+   * derived_from/supports/extends, i.e. the link types that carry a
+   * cause→fix→principle narrative, as opposed to relates_to (too weak to
+   * chain) or contradicts (handled separately below). A single `visited`
+   * set shared across every seed's BFS makes the traversal dedupe- and
+   * cycle-safe: no node is fetched or expanded twice, regardless of how
+   * many seeds reach it or whether the link graph loops back on itself.
+   *
+   * A hop is dropped, and not expanded through, when: the reader can't see
+   * it (T11.4), it's quarantined (T11.3 — graph_expand must not become a
+   * side-channel around quarantine's recall exclusion), or it's gone fully
+   * stale (T11.2's volatility multiplier has decayed to its floor — today
+   * only an unverified 'volatile' memory past its 30-day window).
+   *
+   * Nodes are returned in "ordered chain" order: shallowest (closest to a
+   * seed) first, then by creation time — a stable, deterministic order that
+   * reads as root-cause-first without requiring semantic link subtypes the
+   * schema doesn't have.
+   */
+  expandChain(
+    seedIds: string[],
+    projectId: string,
+    options: { linkTypes?: string[]; maxHops?: number } = {},
+    reader: ReaderContext = {}
+  ): GraphExpandResult {
+    const linkTypes = options.linkTypes ?? ['derived_from', 'supports', 'extends'];
+    const maxHops = Math.max(0, Math.min(options.maxHops ?? 2, 2));
+    const now = new Date();
+
+    const nodeMap = new Map<string, GraphExpandNode>();
+    const visited = new Set<string>();
+    const queue: Array<{ id: string; depth: number }> = [];
+
+    for (const seedId of seedIds) {
+      if (visited.has(seedId)) continue;
+      visited.add(seedId);
+
+      const row = this.db.instance
+        .prepare(
+          `SELECT * FROM memories
+           WHERE id = ? AND project_id = ? AND deleted_at IS NULL AND quarantined_at IS NULL`
+        )
+        .get(seedId, projectId) as MemoryRow | undefined;
+
+      if (!row || !canReadMemory(visibilityFieldsOf(row), reader)) continue;
+
+      nodeMap.set(row.id, {
+        id: row.id,
+        content: row.content,
+        type: row.type,
+        linkType: 'seed',
+        depth: 0,
+        createdAt: new Date(row.created_at * 1000),
+      });
+      queue.push({ id: row.id, depth: 0 });
+    }
+
+    const placeholders = linkTypes.map(() => '?').join(',');
+    const visCols = `m.visibility, m.writer_agent_id, m.writer_team_id, m.restricted_readers`;
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current.depth >= maxHops) continue;
+
+      const rows = this.db.instance
+        .prepare(
+          `SELECT ml.link_type,
+                  CASE WHEN ml.source_id = ? THEN ml.target_id ELSE ml.source_id END as conn_id,
+                  m.content, m.type, m.created_at, m.volatility, m.verified_at, ${visCols}
+           FROM memory_links ml
+           JOIN memories m ON m.id = CASE WHEN ml.source_id = ? THEN ml.target_id ELSE ml.source_id END
+           WHERE (ml.source_id = ? OR ml.target_id = ?)
+             AND m.project_id = ? AND m.deleted_at IS NULL AND m.quarantined_at IS NULL
+             AND ml.link_type IN (${placeholders})`
+        )
+        .all(current.id, current.id, current.id, current.id, projectId, ...linkTypes) as Array<{
+        conn_id: string;
+        link_type: string;
+        content: string;
+        type: string;
+        created_at: number;
+        volatility: string | null;
+        verified_at: number | null;
+        visibility: string | null;
+        writer_agent_id: string | null;
+        writer_team_id: string | null;
+        restricted_readers: string | null;
+      }>;
+
+      for (const row of rows) {
+        if (visited.has(row.conn_id)) continue;
+        visited.add(row.conn_id);
+
+        if (!canReadMemory(visibilityFieldsOf(row), reader)) continue;
+
+        const stale =
+          volatilityMultiplier(
+            {
+              volatility: (row.volatility as Volatility) ?? 'slow',
+              verifiedAt: row.verified_at ? new Date(row.verified_at * 1000) : null,
+              createdAt: new Date(row.created_at * 1000),
+            },
+            now
+          ) <= 0;
+        if (stale) continue;
+
+        const depth = current.depth + 1;
+        nodeMap.set(row.conn_id, {
+          id: row.conn_id,
+          content: row.content,
+          type: row.type,
+          linkType: row.link_type,
+          depth,
+          createdAt: new Date(row.created_at * 1000),
+        });
+        queue.push({ id: row.conn_id, depth });
+      }
+    }
+
+    const nodes = [...nodeMap.values()].sort(
+      (a, b) => a.depth - b.depth || a.createdAt.getTime() - b.createdAt.getTime()
+    );
+
+    return {
+      nodes,
+      contradictions: this.findChainContradictions([...nodeMap.keys()], projectId, reader, now),
+    };
+  }
+
+  /**
+   * `contradicts` edges touching any node reached by expandChain, both
+   * sides + a supersession verdict (T11.5). Mirrors findContradictions'
+   * both-sides-readable rule (T11.4) so a contradiction never leaks a side
+   * the reader can't otherwise see.
+   */
+  private findChainContradictions(
+    nodeIds: string[],
+    projectId: string,
+    reader: ReaderContext,
+    now: Date
+  ): ChainContradiction[] {
+    if (nodeIds.length === 0) return [];
+
+    const placeholders = nodeIds.map(() => '?').join(',');
+    const rows = this.db.instance
+      .prepare(
+        `SELECT
+           ml.id as link_id,
+           ms.id as a_id, ms.content as a_content, ms.type as a_type, ms.confidence as a_confidence,
+           ms.volatility as a_volatility, ms.verified_at as a_verified_at, ms.created_at as a_created_at,
+           ms.superseded_by as a_superseded_by,
+           ms.visibility as a_visibility, ms.writer_agent_id as a_writer_agent_id,
+           ms.writer_team_id as a_writer_team_id, ms.restricted_readers as a_restricted_readers,
+           mt.id as b_id, mt.content as b_content, mt.type as b_type, mt.confidence as b_confidence,
+           mt.volatility as b_volatility, mt.verified_at as b_verified_at, mt.created_at as b_created_at,
+           mt.superseded_by as b_superseded_by,
+           mt.visibility as b_visibility, mt.writer_agent_id as b_writer_agent_id,
+           mt.writer_team_id as b_writer_team_id, mt.restricted_readers as b_restricted_readers
+         FROM memory_links ml
+         JOIN memories ms ON ml.source_id = ms.id
+         JOIN memories mt ON ml.target_id = mt.id
+         WHERE ml.link_type = 'contradicts'
+           AND ms.project_id = ? AND ms.deleted_at IS NULL AND ms.quarantined_at IS NULL
+           AND mt.deleted_at IS NULL AND mt.quarantined_at IS NULL
+           AND (ml.source_id IN (${placeholders}) OR ml.target_id IN (${placeholders}))`
+      )
+      .all(projectId, ...nodeIds, ...nodeIds) as Array<{
+      link_id: string;
+      a_id: string;
+      a_content: string;
+      a_type: string;
+      a_confidence: number;
+      a_volatility: string | null;
+      a_verified_at: number | null;
+      a_created_at: number;
+      a_superseded_by: string | null;
+      a_visibility: string | null;
+      a_writer_agent_id: string | null;
+      a_writer_team_id: string | null;
+      a_restricted_readers: string | null;
+      b_id: string;
+      b_content: string;
+      b_type: string;
+      b_confidence: number;
+      b_volatility: string | null;
+      b_verified_at: number | null;
+      b_created_at: number;
+      b_superseded_by: string | null;
+      b_visibility: string | null;
+      b_writer_agent_id: string | null;
+      b_writer_team_id: string | null;
+      b_restricted_readers: string | null;
+    }>;
+
+    const out: ChainContradiction[] = [];
+    for (const r of rows) {
+      const aVis = visibilityFieldsOf({
+        visibility: r.a_visibility,
+        writer_agent_id: r.a_writer_agent_id,
+        writer_team_id: r.a_writer_team_id,
+        restricted_readers: r.a_restricted_readers,
+      });
+      const bVis = visibilityFieldsOf({
+        visibility: r.b_visibility,
+        writer_agent_id: r.b_writer_agent_id,
+        writer_team_id: r.b_writer_team_id,
+        restricted_readers: r.b_restricted_readers,
+      });
+      if (!canReadMemory(aVis, reader) || !canReadMemory(bVis, reader)) continue;
+
+      const verdict = this.resolveSupersession(
+        {
+          id: r.a_id,
+          confidence: r.a_confidence,
+          supersededBy: r.a_superseded_by,
+          volatility: (r.a_volatility as Volatility) ?? 'slow',
+          verifiedAt: r.a_verified_at ? new Date(r.a_verified_at * 1000) : null,
+          createdAt: new Date(r.a_created_at * 1000),
+        },
+        {
+          id: r.b_id,
+          confidence: r.b_confidence,
+          supersededBy: r.b_superseded_by,
+          volatility: (r.b_volatility as Volatility) ?? 'slow',
+          verifiedAt: r.b_verified_at ? new Date(r.b_verified_at * 1000) : null,
+          createdAt: new Date(r.b_created_at * 1000),
+        },
+        now
+      );
+
+      out.push({
+        linkId: r.link_id,
+        a: { id: r.a_id, content: r.a_content, type: r.a_type },
+        b: { id: r.b_id, content: r.b_content, type: r.b_type },
+        verdict,
+      });
+    }
+
+    return out;
+  }
+
+  /**
+   * Which side of a contradiction is current. An explicit version-supersede
+   * pointer (memory versioning's supersededBy, distinct from the
+   * `contradicts` link itself) is definitive when present; otherwise the
+   * less-stale side wins (T11.2 volatility scoring), then higher
+   * confidence; ties are reported 'unresolved' rather than guessed.
+   */
+  private resolveSupersession(
+    a: {
+      id: string;
+      confidence: number;
+      supersededBy: string | null;
+      volatility: Volatility;
+      verifiedAt: Date | null;
+      createdAt: Date;
+    },
+    b: {
+      id: string;
+      confidence: number;
+      supersededBy: string | null;
+      volatility: Volatility;
+      verifiedAt: Date | null;
+      createdAt: Date;
+    },
+    now: Date
+  ): SupersessionVerdict {
+    if (a.supersededBy === b.id) return { winnerId: b.id, reason: 'superseded_version' };
+    if (b.supersededBy === a.id) return { winnerId: a.id, reason: 'superseded_version' };
+
+    const aFreshness = volatilityMultiplier(a, now);
+    const bFreshness = volatilityMultiplier(b, now);
+    if (aFreshness !== bFreshness) {
+      return { winnerId: aFreshness > bFreshness ? a.id : b.id, reason: 'fresher' };
+    }
+
+    if (a.confidence !== b.confidence) {
+      return { winnerId: a.confidence > b.confidence ? a.id : b.id, reason: 'higher_confidence' };
+    }
+
+    return { winnerId: null, reason: 'unresolved' };
   }
 
   /**

@@ -7,7 +7,16 @@ import { RelationRepository } from './relations.js';
 export { EntityRepository } from './entities.js';
 export { RelationRepository } from './relations.js';
 export { MemoryGraphService } from './memory-graph.js';
-export type { MemoryGraphStats, ContradictionPair, MemoryChain, MemoryCluster } from './memory-graph.js';
+export type {
+  MemoryGraphStats,
+  ContradictionPair,
+  MemoryChain,
+  MemoryCluster,
+  GraphExpandNode,
+  ChainContradiction,
+  SupersessionVerdict,
+  GraphExpandResult,
+} from './memory-graph.js';
 export { KnowledgeGraphPopulator } from './populator.js';
 export type { PopulationResult, PopulatorConfig } from './populator.js';
 
@@ -59,16 +68,10 @@ export class KnowledgeGraph {
   /**
    * Find connected entities up to a depth
    */
-  findConnected(
-    entityId: string,
-    projectId: string,
-    depth: number = 2
-  ): ConnectedResult[] {
+  findConnected(entityId: string, projectId: string, depth: number = 2): ConnectedResult[] {
     const visited = new Map<string, { entity: Entity; depth: number }>();
     const results: ConnectedResult[] = [];
-    const queue: Array<{ id: string; level: number }> = [
-      { id: entityId, level: 0 },
-    ];
+    const queue: Array<{ id: string; level: number }> = [{ id: entityId, level: 0 }];
 
     while (queue.length > 0) {
       const current = queue.shift()!;
@@ -84,8 +87,7 @@ export class KnowledgeGraph {
       if (current.level < depth) {
         const relations = this.relations.findRelations(current.id, projectId);
         for (const rel of relations) {
-          const nextId =
-            rel.sourceId === current.id ? rel.targetId : rel.sourceId;
+          const nextId = rel.sourceId === current.id ? rel.targetId : rel.sourceId;
           if (!visited.has(nextId)) {
             queue.push({ id: nextId, level: current.level + 1 });
           }
@@ -153,13 +155,9 @@ export class KnowledgeGraph {
       visited.add(current.entityId);
 
       // Explore neighbors
-      const relations = this.relations.findRelations(
-        current.entityId,
-        projectId
-      );
+      const relations = this.relations.findRelations(current.entityId, projectId);
       for (const rel of relations) {
-        const nextId =
-          rel.sourceId === current.entityId ? rel.targetId : rel.sourceId;
+        const nextId = rel.sourceId === current.entityId ? rel.targetId : rel.sourceId;
         if (!visited.has(nextId)) {
           queue.push({
             entityId: nextId,
@@ -176,11 +174,7 @@ export class KnowledgeGraph {
   /**
    * Get subgraph around an entity
    */
-  getSubgraph(
-    entityId: string,
-    projectId: string,
-    radius: number = 2
-  ): SubgraphResult | null {
+  getSubgraph(entityId: string, projectId: string, radius: number = 2): SubgraphResult | null {
     const center = this.entities.findById(entityId, projectId);
     if (!center) return null;
 
@@ -290,10 +284,7 @@ export class KnowledgeGraph {
     const relationCounts = this.relations.countByProject(projectId);
 
     const totalEntities = Object.values(entityCounts).reduce((a, b) => a + b, 0);
-    const totalRelations = Object.values(relationCounts).reduce(
-      (a, b) => a + b,
-      0
-    );
+    const totalRelations = Object.values(relationCounts).reduce((a, b) => a + b, 0);
 
     return {
       entityCounts,
