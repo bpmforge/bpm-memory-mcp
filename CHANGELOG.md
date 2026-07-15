@@ -4,6 +4,42 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-07-14
+
+### Fixed
+
+- **Embedder self-heal — semantic recall is no longer silently disabled for a
+  whole session.** `EmbeddingService.initialize()` ran exactly once per project;
+  if the embedding provider was unreachable at that instant (LM Studio still
+  loading a model, or started after the MCP server), it returned `false` and
+  every subsequent `memory_recall` fell back to keyword-only BM25 for the rest of
+  the session — even though the vector corpus was fully embedded. `embed()` /
+  `embedBatch()` now lazily retry initialization via a throttled `ensureReady()`
+  (default once per 30 s, `reinitThrottleMs`), so a transient startup outage
+  self-heals on the next embed instead of degrading recall silently. Diagnosed
+  live: a fully-embedded 768-dim corpus was returning `vectorMatches: 0` because
+  the running server's embedder was never re-probed after a startup miss.
+  Regression test: `tests/unit/embedder-reinit.test.ts` (self-heal + throttle +
+  no-op-when-ready).
+
+### Added (previously merged, first tagged here)
+
+The following were merged to `main` via reviewed PRs after v1.1.0 and are
+released for the first time in this version:
+
+- **T11.4 — Fleet scopes.** Per-memory visibility across `agent_local` / `team` /
+  `global` / `restricted` scopes, with read-enforcement so feedback/recall can't
+  cross a scope boundary (PR #6, incl. review #6 content-returning read gaps).
+- **T11.3 — Quarantine scope + promotion** for web-derived facts (PR #5).
+- **T23.6 — Standalone `memory-cli snapshot`** command (RC-2 DR).
+- **T11.2 — Volatility-scaled recall scoring.**
+
+### Ops
+
+- Reconciled a dual-remote divergence: `origin` (Gitea) `main` was 4 commits
+  behind `github` `main` (PRs #5/#6 merged on GitHub only). Both remotes are back
+  in sync as of this release.
+
 ## [1.1.0] — 2026-06-23
 
 ### B1 — Memory Activation
