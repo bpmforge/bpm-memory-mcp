@@ -26,6 +26,16 @@ export class EmbeddingService {
   private model: string | null = null;
   private cache: EmbeddingCache;
   private initialized = false;
+  /** The config the last initialize() ran with, so ensureReady() can retry it. */
+  private lastConfig: ProviderConfig | undefined = undefined;
+  /** Timestamp (ms) of the last initialize() attempt, for re-init throttling. */
+  private lastInitAttempt = 0;
+  /**
+   * Minimum gap between automatic re-init attempts once the provider was found
+   * unavailable. Public so tests can shorten it. A down provider is retried at
+   * most once per window, so recall stays fast when it's genuinely offline.
+   */
+  reinitThrottleMs = 30_000;
 
   constructor(db?: DatabaseConnection) {
     this.cache = new EmbeddingCache(db);
@@ -35,6 +45,9 @@ export class EmbeddingService {
    * Initialize with auto-detection or explicit config
    */
   async initialize(config?: ProviderConfig): Promise<boolean> {
+    this.lastConfig = config;
+    this.lastInitAttempt = Date.now();
+
     if (config) {
       // Use explicit configuration
       this.provider = getProvider(config.provider, config.endpoint);
@@ -56,6 +69,24 @@ export class EmbeddingService {
 
     this.initialized = false;
     return false;
+  }
+
+  /**
+   * Lazily (re)initialize the embedder if it is not ready.
+   *
+   * A provider that is unreachable at server startup (e.g. LM Studio still
+   * loading a model) must NOT disable semantic recall for the entire session:
+   * before this, initialize() ran exactly once and any failure left every
+   * subsequent recall on keyword-only search — even though the vector corpus is
+   * fully embedded. ensureReady() retries the last-used config, throttled, so a
+   * transient startup outage self-heals on the next embed() instead of degrading
+   * silently forever. Returns true if the service is ready afterwards.
+   */
+  async ensureReady(): Promise<boolean> {
+    if (this.isAvailable) return true;
+    const now = Date.now();
+    if (now - this.lastInitAttempt < this.reinitThrottleMs) return false;
+    return this.initialize(this.lastConfig);
   }
 
   /**
@@ -84,7 +115,12 @@ export class EmbeddingService {
    * Returns null if service unavailable (graceful degradation)
    */
   async embed(text: string): Promise<Float32Array | null> {
-    if (!this.isAvailable || !this.provider || !this.model) {
+    // Lazy re-init: a provider unreachable at startup must not disable semantic
+    // recall for the whole session — retry (throttled) before giving up.
+    if (!this.isAvailable && !(await this.ensureReady())) {
+      return null;
+    }
+    if (!this.provider || !this.model) {
       return null;
     }
 
@@ -108,7 +144,11 @@ export class EmbeddingService {
    * Generate embeddings for multiple texts
    */
   async embedBatch(texts: string[]): Promise<Array<Float32Array | null>> {
-    if (!this.isAvailable || !this.provider || !this.model) {
+    // Lazy re-init (see embed()) — one throttled retry before falling back.
+    if (!this.isAvailable && !(await this.ensureReady())) {
+      return texts.map(() => null);
+    }
+    if (!this.provider || !this.model) {
       return texts.map(() => null);
     }
 
@@ -135,9 +175,7 @@ export class EmbeddingService {
               uncachedTexts.map((t) => t.text),
               this.model
             )
-          : await Promise.all(
-              uncachedTexts.map((t) => this.provider!.embed(t.text, this.model!))
-            );
+          : await Promise.all(uncachedTexts.map((t) => this.provider!.embed(t.text, this.model!)));
 
         for (let i = 0; i < uncachedTexts.length; i++) {
           const item = uncachedTexts[i]!;
