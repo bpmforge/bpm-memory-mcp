@@ -63,6 +63,7 @@ import {
   MemoryGraphService,
   KnowledgeGraphPopulator,
   type PopulationResult,
+  type ChainContradiction,
 } from './graph/index.js';
 import {
   estimateTokens,
@@ -760,6 +761,11 @@ function createServer(): Server {
               maximum: 10000,
               description:
                 'Maximum tokens for assembled context. Memories will be truncated to fit. Presets: 500 (minimal), 2000 (standard), 4000 (detailed), 8000 (maximum)',
+            },
+            graphExpand: {
+              type: 'boolean',
+              description:
+                'V11.5: expand the top-K seed memories up to 2 hops over typed links (derived_from/supports/extends) into an ordered chain, returned separately as "chain". contradicts edges touching the chain return both sides plus a supersession verdict in "chainContradictions". Default false.',
             },
           },
           required: ['task'],
@@ -3192,6 +3198,7 @@ function createServer(): Server {
             tokenBudget,
             readerAgentId,
             readerTeamId,
+            graphExpand,
           } = args as {
             task: string;
             files?: string[];
@@ -3201,6 +3208,8 @@ function createServer(): Server {
             // V13: fleet-scope reader identity (T11.4)
             readerAgentId?: string;
             readerTeamId?: string;
+            // T11.5: graph_expand chain recall
+            graphExpand?: boolean;
           };
           // V13: fleet-scope reader identity (T11.4)
           const assembleReader: ReaderContext = {
@@ -3328,6 +3337,47 @@ function createServer(): Server {
             }
           }
 
+          // T11.5: graph_expand chain recall. Seeds are the RRF top-K memories
+          // already selected above (project scope only — graph traversal is
+          // per-project, so a global-scope hit can't seed it); expandChain
+          // dedupes seed-vs-hop internally, so "chain" here only carries the
+          // *new* nodes discovered by hopping (depth 0 seeds are already in
+          // `topMemories`/the sections below — repeating them would duplicate
+          // content in the assembled context).
+          let chainNodes: Array<{
+            id: string;
+            content: string;
+            type: string;
+            linkType: string;
+            depth: number;
+          }> = [];
+          let chainContradictions: ChainContradiction[] = [];
+
+          if (graphExpand && memoryGraphService) {
+            const seedIds = Array.from(
+              new Set(preTokenMemories.filter((m) => m.scope === 'project').map((m) => m.id))
+            );
+
+            if (seedIds.length > 0) {
+              const expanded = memoryGraphService.expandChain(
+                seedIds,
+                projectId,
+                {},
+                assembleReader
+              );
+              const hopOnly = expanded.nodes.filter((n) => n.depth > 0);
+
+              const { items: fittedChain } = fitItemsToTokenBudget(hopOnly, budget, {
+                headerTokens: 50,
+                itemOverhead: 10,
+                minItemTokens: 30,
+              });
+
+              chainNodes = fittedChain;
+              chainContradictions = expanded.contradictions;
+            }
+          }
+
           // Group memories by type for structured output
           const byType: Record<string, ContextMemory[]> = {};
           for (const m of topMemories) {
@@ -3389,6 +3439,28 @@ function createServer(): Server {
             contextText += '\n';
           }
 
+          // T11.5: graph_expand chain — cause→fix→principle ordered by hop
+          // depth (expandChain already sorted it; rendered in that order).
+          if (graphExpand && chainNodes.length > 0) {
+            contextText += '### Related Chain (graph expansion)\n';
+            for (const n of chainNodes) {
+              contextText += `- [${n.linkType}, depth ${n.depth}] ${n.content}\n`;
+            }
+            contextText += '\n';
+          }
+
+          if (graphExpand && chainContradictions.length > 0) {
+            contextText += '### ⚠️ Chain Contradictions (with supersession verdict)\n';
+            for (const c of chainContradictions) {
+              const verdictText =
+                c.verdict.winnerId !== null
+                  ? `"${c.verdict.winnerId}" wins (${c.verdict.reason})`
+                  : 'unresolved';
+              contextText += `- "${c.a.content.substring(0, 100)}" vs "${c.b.content.substring(0, 100)}" — ${verdictText}\n`;
+            }
+            contextText += '\n';
+          }
+
           // Calculate actual token usage of context text
           const contextTokens = estimateTokens(contextText);
 
@@ -3400,6 +3472,7 @@ function createServer(): Server {
                   context: contextText,
                   memories: topMemories,
                   contradictions,
+                  ...(graphExpand ? { chain: chainNodes, chainContradictions } : {}),
                   stats: {
                     totalRecalled: topMemories.length,
                     byType: Object.fromEntries(
@@ -3411,10 +3484,17 @@ function createServer(): Server {
                     estimatedTokens: contextTokens,
                     memoriesTruncated: truncatedCount,
                     memoriesExcluded: preTokenMemories.length - itemsIncluded,
+                    // T11.5: graph_expand stats
+                    ...(graphExpand
+                      ? {
+                          chainNodes: chainNodes.length,
+                          chainContradictionCount: chainContradictions.length,
+                        }
+                      : {}),
                   },
                   message:
                     topMemories.length > 0
-                      ? `Assembled context from ${topMemories.length} memories (~${contextTokens} tokens).${truncatedCount > 0 ? ` ${truncatedCount} truncated to fit budget.` : ''}${contradictions.length > 0 ? ` Warning: ${contradictions.length} potential contradiction(s).` : ''}`
+                      ? `Assembled context from ${topMemories.length} memories (~${contextTokens} tokens).${truncatedCount > 0 ? ` ${truncatedCount} truncated to fit budget.` : ''}${contradictions.length > 0 ? ` Warning: ${contradictions.length} potential contradiction(s).` : ''}${graphExpand && chainNodes.length > 0 ? ` Graph-expanded ${chainNodes.length} chain node(s).` : ''}`
                       : 'No relevant memories found for this task.',
                 }),
               },
