@@ -11,6 +11,10 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+
+// tests/benchmarks/real/ -> repo root
+const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 // Rough token estimation: ~4 chars per token for English text
 function estimateTokens(text: string): number {
@@ -25,12 +29,12 @@ async function main() {
   writeFileSync(join(projectRoot, 'src', 'auth.ts'), 'export function authenticate() { return true; }');
 
   console.log('Building MCP server...');
-  execSync('npm run build', { cwd: '/Users/bmatthews/Code/claude-memory', stdio: 'pipe' });
+  execSync('npm run build', { cwd: REPO_ROOT, stdio: 'pipe' });
 
   // Start server
   const transport = new StdioClientTransport({
     command: 'node',
-    args: ['/Users/bmatthews/Code/claude-memory/mcp/memory-server/dist/index.js'],
+    args: [join(REPO_ROOT, 'mcp/memory-server/dist/index.js')],
     env: { ...process.env, CLAUDE_PROJECT_ROOT: projectRoot },
     stderr: 'pipe',
   });

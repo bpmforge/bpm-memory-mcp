@@ -20,6 +20,10 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+
+// tests/benchmarks/real/ -> repo root
+const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 // Test infrastructure
 let client: Client;
@@ -93,7 +97,7 @@ beforeAll(async () => {
   // Ensure server is built
   try {
     execSync('npm run build', {
-      cwd: '/Users/bmatthews/Code/claude-memory',
+      cwd: REPO_ROOT,
       stdio: 'pipe'
     });
   } catch (e) {
@@ -105,7 +109,7 @@ beforeAll(async () => {
   // Start the REAL MCP server
   transport = new StdioClientTransport({
     command: 'node',
-    args: ['/Users/bmatthews/Code/claude-memory/mcp/memory-server/dist/index.js'],
+    args: [join(REPO_ROOT, 'mcp/memory-server/dist/index.js')],
     env: {
       ...process.env,
       CLAUDE_PROJECT_ROOT: projectRoot,
