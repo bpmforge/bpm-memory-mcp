@@ -85,11 +85,10 @@ export class HybridSearch {
     // Combine results using RRF
     let fusedResults: MemorySearchResult[];
 
+    // Link traversal is seeded from vector/BM25 hits, so with neither there
+    // are no link results either.
     if (vectorResults.length === 0 && bm25Results.length === 0) {
       fusedResults = [];
-    } else if (vectorResults.length === 0 && bm25Results.length === 0 && linkResults.length > 0) {
-      // Only link results available
-      fusedResults = linkResults.slice(0, candidateLimit);
     } else if (linkResults.length > 0) {
       // Full three-way fusion with links
       fusedResults = rrfFusionWithLinks(vectorResults, bm25Results, linkResults, {
