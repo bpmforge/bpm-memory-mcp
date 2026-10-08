@@ -19,6 +19,10 @@ All notable changes to this project are documented here. Format follows
 - Dead `$schema` URLs in `.claude-plugin/*.json` and `hooks/settings.json`
   (they returned 404). Repository links there now point at
   `bpmforge/bpm-memory-mcp`.
+- `.claude-plugin/manifest.json`, `.claude-plugin/marketplace.json` and
+  `hooks/settings.json`: none matched Claude Code's plugin or hooks format
+  (the hooks file listed `SessionStart` as a `PreToolUse` matcher) and nothing,
+  including `install.sh`, read them. The `hooks/*.sh` scripts remain.
 
 ### Docs
 

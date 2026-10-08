@@ -49,8 +49,7 @@
   "files": [
     "mcp/memory-server/dist",
     "skills",
-    "hooks",
-    ".claude-plugin"
+    "hooks"
   ],
   "keywords": [
     "claude",
