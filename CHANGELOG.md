@@ -11,6 +11,12 @@ All notable changes to this project are documented here. Format follows
 - The MCP server advertised version `1.0.0`; it now reports `1.2.0`.
 - `tests/benchmarks/real/*` resolved the repo from a hardcoded
   `/Users/...` path; they now resolve it relative to the test file.
+- `npm run lint` failed to start: `eslint.config.js` imports
+  `typescript-eslint` and `@eslint/js`, which are now declared
+  devDependencies. Lint runs and reports existing errors (187).
+- `install.sh` printed an outdated MCP settings snippet; it now prints
+  `claude mcp add memory node <path>` and the OpenCode entry.
+- Removed an unreachable branch in hybrid search fusion (no behaviour change).
 
 ### Removed
 
@@ -29,6 +35,8 @@ All notable changes to this project are documented here. Format follows
 - README: lists all 19 tools; documents the real embedding configuration
   (`~/.claude-memory/config.json`, Ollama default), environment variables,
   schema v13, the CLI, and the renamed `attest-claude` / `attest` installers.
+- CLAUDE.md: correct project name, tool count (19), validation commands,
+  schema and test facts, and directory layout.
 
 ## [1.2.0] — 2026-07-14
 
