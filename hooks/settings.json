@@ -1,5 +1,4 @@
 {
-  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/hooks-settings.json",
   "description": "Claude Memory plugin hook configurations - V9 with auto-extraction and proactive context",
   "hooks": {
     "PreToolUse": [

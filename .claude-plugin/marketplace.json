@@ -1,5 +1,4 @@
 {
-  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/marketplace-listing.json",
   "name": "claude-memory",
   "displayName": "Claude Memory",
   "description": "Persistent intelligent memory for Claude Code with hybrid search, local embeddings, and context management",
@@ -7,9 +6,9 @@
   "version": "1.0.0",
   "author": {
     "name": "claude-memory contributors",
-    "url": "https://github.com/anthropics/claude-memory"
+    "url": "https://github.com/bpmforge/bpm-memory-mcp"
   },
-  "repository": "https://github.com/anthropics/claude-memory",
+  "repository": "https://github.com/bpmforge/bpm-memory-mcp",
   "license": "MIT",
   "categories": ["productivity", "memory", "search", "ai"],
   "tags": [
@@ -41,7 +40,7 @@
     }
   ],
   "screenshots": [],
-  "installInstructions": "## Quick Install\n\n```bash\ngit clone https://github.com/anthropics/claude-memory\ncd claude-memory\n./install.sh\n```\n\n## Manual Install\n\n1. Clone the repository\n2. Run `npm install && npm run build`\n3. Add MCP server to your Claude Code settings\n4. Install Ollama and pull nomic-embed-text model\n\nSee README.md for detailed instructions.",
+  "installInstructions": "## Quick Install\n\n```bash\ngit clone https://github.com/bpmforge/bpm-memory-mcp\ncd bpm-memory-mcp\n./install.sh\n```\n\n## Manual Install\n\n1. Clone the repository\n2. Run `npm install && npm run build`\n3. Add MCP server to your Claude Code settings\n4. Install Ollama and pull nomic-embed-text model\n\nSee README.md for detailed instructions.",
   "pricing": {
     "type": "free"
   },
@@ -56,7 +55,7 @@
     "architectures": ["x64", "arm64"]
   },
   "support": {
-    "issues": "https://github.com/anthropics/claude-memory/issues",
-    "discussions": "https://github.com/anthropics/claude-memory/discussions"
+    "issues": "https://github.com/bpmforge/bpm-memory-mcp/issues",
+    "discussions": "https://github.com/bpmforge/bpm-memory-mcp/discussions"
   }
 }

@@ -1115,7 +1115,7 @@ graph_query "find_connected" entity="UserService" depth=2
 
 **Example:**
 ```
-/plugin install github:anthropics/claude-memory
+/plugin install github:bpmforge/bpm-memory-mcp
 > Cloning repository...
 > Installing skill to ~/.claude/skills/memory/
 > Configuring MCP server...

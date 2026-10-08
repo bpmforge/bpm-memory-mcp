@@ -1,11 +1,10 @@
 {
-  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/plugin-manifest.json",
   "name": "claude-memory",
   "version": "1.0.0",
   "description": "Persistent intelligent memory for Claude Code with hybrid search, local embeddings, and context management",
   "author": "claude-memory contributors",
   "license": "MIT",
-  "repository": "https://github.com/anthropics/claude-memory",
+  "repository": "https://github.com/bpmforge/bpm-memory-mcp",
   "keywords": ["memory", "embeddings", "search", "context", "mcp"],
   "engines": {
     "node": ">=22.0.0",
