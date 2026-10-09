@@ -10,7 +10,7 @@ memory_store({ content, type, confidence, citation }) # when you discover someth
 session_save({ summary: "..." })                     # session end — persist what happened
 ```
 
-## All 14 tools
+## All 19 tools
 
 | Tool | Purpose |
 |------|---------|
@@ -18,12 +18,17 @@ session_save({ summary: "..." })                     # session end — persist w
 | `session_save` | Persist a session summary |
 | `memory_store` | Store a memory (fact, decision, pattern, error, preference) |
 | `memory_recall` | Hybrid search — vector + BM25 + link traversal |
-| `memory_forget` | Remove a memory |
-| `memory_update` | Update an existing memory |
-| `memory_link` | Link two related memories |
-| `memory_consolidate` | Merge near-duplicate memories |
+| `memory_feedback` | Rate a recalled memory (helpful / wrong / outdated / duplicate) to tune future results |
+| `memory_forget` | Soft-delete a memory, with a reason |
+| `memory_update` | Update an existing memory (creates a new version in its supersession chain) |
+| `memory_history` | Show the version history of a memory, newest first |
+| `memory_link` | Link related memories and run graph queries (contradictions, chains, clusters, entities) |
+| `memory_consolidate` | Merge duplicates, decay unused memories, summarize clusters |
 | `memory_context_assemble` | Assemble relevant context for a prompt |
 | `memory_auto_extract` | Auto-extract memories from conversation text |
+| `memory_reembed` | Re-generate embeddings with the current embedding model |
+| `memory_migrate` | Move or copy a memory between scopes/projects |
+| `memory_list_projects` | List projects that have memory databases, with sizes and counts |
 | `fact_store` | Store a structured fact with source tracking |
 | `fact_query` | Query the fact store |
 | `goal_anchor` | Anchor a goal to be injected at context boundaries |
@@ -41,57 +46,71 @@ session_save({ summary: "..." })                     # session end — persist w
 
 ## Search
 
-Hybrid search with Reciprocal Rank Fusion: **vector (35%) + BM25 (35%) + link traversal (30%)**.
+Hybrid search with Reciprocal Rank Fusion (k=60): **vector (35%) + BM25 (35%) + link traversal (30%)** when linked memories are found, otherwise vector + BM25 at 50/50. A volatility-scaled staleness penalty is applied to the fused score.
 
-**BM25 keyword search works with no embedding setup at all.** Vector search is optional.
+**BM25 keyword search works with no embedding setup at all.** Vector search is optional: without an embedder, memories are stored without vectors and recall is keyword-only. The server re-probes the embedder (at most every 30 s), so starting one later turns vector recall on without a restart.
 
 ### Embedding setup
 
-**Default: LM Studio (free, local)**
-1. Download [LM Studio](https://lmstudio.ai) and load `nomic-ai/nomic-embed-text-v1.5-GGUF`
-2. No config needed — defaults to `http://localhost:1234`
+The server reads its embedder from `~/.claude-memory/config.json`. With no config file it uses **Ollama** at `http://localhost:11434` with `nomic-embed-text` (768 dimensions).
 
-**Alternative model:**
-```bash
-export LM_STUDIO_URL="http://localhost:1234"
-export LM_STUDIO_MODEL="CompendiumLabs/bge-large-en-v1.5-gguf"  # any model
-```
+**Default: Ollama (free, local)**
+1. Install [Ollama](https://ollama.com) and run `ollama pull nomic-embed-text`
+2. No config needed
 
-**OpenAI embeddings:**
-```bash
-export LM_STUDIO_URL="https://api.openai.com/v1"
-export LM_STUDIO_MODEL="text-embedding-3-small"
-export OPENAI_API_KEY="sk-..."
+**LM Studio, another model, or a remote server** — create `~/.claude-memory/config.json`:
+```json
+{
+  "embedding": {
+    "provider": "lmstudio",
+    "endpoint": "http://localhost:1234",
+    "model": "text-embedding-nomic-embed-text-v1.5",
+    "dimensions": 768
+  },
+  "version": 1
+}
 ```
-
-**Remote LM Studio server:**
-```bash
-export LM_STUDIO_URL="http://192.168.1.x:1234"
-```
-
-**No embeddings (BM25 only):**
-```bash
-export EMBEDDING_PROVIDER=none
-```
+`provider` is `ollama` or `lmstudio`. `endpoint` is the server root — the client appends `/v1/embeddings` (LM Studio) or `/api/embeddings` (Ollama) itself, so a remote host such as `http://192.168.1.x:1234` works too. No API key is sent, so hosted APIs that require one (e.g. OpenAI) are not supported.
 
 > **Provider-sticky:** Changing the embedding model requires re-embedding stored memories. Run `memory_reembed()` after switching models.
 
-## Schema v9
+### Environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CLAUDE_PROJECT_ROOT` | `cwd` | Project whose memory database is used |
+| `MEMORY_AGENT_ID` | _(unset)_ | Default writer/reader agent id for fleet-scoped memories |
+| `MEMORY_TEAM_ID` | _(unset)_ | Default writer/reader team id for `team`-visibility memories |
+| `CLAUDE_MEMORY_SLEEP_CONSOLIDATION` | `false` | Set to `true` to run consolidation automatically on `session_save` |
+| `CLAUDE_MEMORY_CONSOLIDATION_INTERVAL_HOURS` | `24` | Minimum hours between automatic consolidation runs per project |
+| `CLAUDE_MEMORY_CONSOLIDATION_LOG_PATH` | `~/.claude-memory/logs/consolidation.log` | Consolidation run log |
+
+Memory databases live under `~/.claude-memory/<project-id>/memory.db`, where `<project-id>` is the first 16 hex characters of the SHA-256 of the project root path.
+
+## Schema v13
 
 - Semantic deduplication at store time
 - Freshness burst (recent memories rank higher)
 - Fact decay (confidence degrades on stale entries)
 - Link traversal for relationship-aware recall
-- 275 tests
+- Sleep-time consolidation run tracking (v10)
+- Temporal validity + volatility fields, used for staleness-scaled recall (v11)
+- Quarantine scope + promotion for web-derived facts (v12)
+- Fleet scopes: `agent_local` / `team` / `global` / `restricted` visibility (v13)
+- 417 tests
+
+## CLI
+
+`npm run build` also produces `memory-cli` (`node mcp/memory-server/dist/cli.js`): `list`, `search`, `delete`, `export`, `import`, `snapshot`, `stats`, `consolidate`, `projects`. Run `memory-cli help` for options.
 
 ## Install
 
-Handled automatically by `claude-experts` or `bpm-opencode-experts` `install.sh --memory`.
+Handled automatically by the `install.sh` of [`attest-claude`](https://github.com/bpmforge/attest-claude) (Claude Code; installed by default, skip with `--no-memory`) or [`attest`](https://github.com/bpmforge/attest) (OpenCode; opt in with `--memory`).
 
 **Manual:**
 ```bash
 git clone https://github.com/bpmforge/bpm-memory-mcp.git ~/Code/bpm-memory-mcp
-cd ~/Code/bpm-memory-mcp && npm install && npm run build
+cd ~/Code/bpm-memory-mcp && npm ci && npm run build
 
 # Claude Code
 claude mcp add memory node ~/Code/bpm-memory-mcp/mcp/memory-server/dist/index.js
@@ -102,8 +121,12 @@ claude mcp add memory node ~/Code/bpm-memory-mcp/mcp/memory-server/dist/index.js
 
 ## Full protocol
 
-See `agents/shared/MEMORY_PRIMER.md` in [claude-experts](https://github.com/bpmforge/claude-experts) or [bpm-opencode-experts](https://github.com/bpmforge/bpm-opencode-experts).
+See `agents/shared/MEMORY_PRIMER.md` in [attest-claude](https://github.com/bpmforge/attest-claude/blob/main/agents/shared/MEMORY_PRIMER.md) or [attest](https://github.com/bpmforge/attest/blob/main/agents/shared/MEMORY_PRIMER.md).
+
+## Requirements
+
+- Node 22+ (enforced by `.npmrc` `engine-strict`)
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

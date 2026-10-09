@@ -1,12 +1,16 @@
-# Project: claude-memory
+# Project: bpm-memory-mcp
+
+(npm package name: `claude-memory`)
 
 ## Description
-A hybrid Claude Code plugin providing persistent intelligent memory through the optimal combination of Skills, MCP Server, and Hooks. Features local embeddings (Ollama), hybrid search (vector + BM25 with RRF fusion), knowledge graph with temporal awareness, and context compression. Achieves 75% lower token overhead than pure MCP solutions while maintaining full computational capability.
+LLM-agnostic cross-session memory MCP server, used from Claude Code, OpenCode or any MCP client, plus a memory skill and optional hook scripts. Features local embeddings (Ollama or LM Studio), hybrid search (vector + BM25 + link traversal with RRF fusion), a knowledge graph with temporal awareness, and context compression. The Skill + MCP + Hooks split is meant to keep token overhead well below a pure-MCP design.
 
-## SDLC State
+## SDLC State (as last recorded, 2026-01-17)
 - Current Phase: 4 (Implementation)
 - Phases Completed: [0, 1, 2, 3]
 - Last Updated: 2026-01-17
+
+Released since: 1.0.0 and 1.2.0 (see `CHANGELOG.md`).
 
 ## Phase Approvals
 | Phase | Status | Approved By | Date |
@@ -18,15 +22,15 @@ A hybrid Claude Code plugin providing persistent intelligent memory through the 
 | 4 | Pending | - | - |
 
 ## Key Decisions
-- **Architecture**: Hybrid Plugin (Skill + MCP + Hooks) for 75% lower token overhead
-- **Skill Layer**: SKILL.md teaches Claude when/how to use memory (~2000 tokens)
-- **MCP Server**: 6 focused tools (memory_store, memory_recall, memory_forget, session_save, session_restore, graph_query)
-- **Hooks Layer**: Deterministic automation (session restore/save, project switch, error capture)
-- **Embeddings**: Local-first multi-provider (Ollama + LM Studio with auto-detection)
-- **Storage**: SQLite with BLOB for vectors, FTS5 for BM25
-- **Search**: Hybrid (Vector + BM25 with RRF fusion, k=60)
-- **Memory Types**: Working (20%), Core/MemGPT-style (15%), Archival (25%), Task (40%)
-- **Tech Stack**: TypeScript (MCP SDK compatibility)
+- **Architecture**: Hybrid (Skill + MCP + Hooks) to keep token overhead low
+- **Skill Layer**: `skills/memory/SKILL.md` teaches Claude when/how to use memory (~2000 tokens)
+- **MCP Server**: 19 tools (listed in `README.md`): `session_restore`, `session_save`, `memory_store`, `memory_recall`, `memory_feedback`, `memory_forget`, `memory_update`, `memory_history`, `memory_link`, `memory_consolidate`, `memory_context_assemble`, `memory_auto_extract`, `memory_reembed`, `memory_migrate`, `memory_list_projects`, `fact_store`, `fact_query`, `goal_anchor`, `checkpoint_task`
+- **Hooks Layer**: shell scripts in `hooks/` (session restore/save, project switch, error capture, memory extraction, goal check). Nothing in this repo registers them; wire them into Claude Code's own hooks settings if wanted
+- **Embeddings**: Local-first, Ollama or LM Studio. The server reads `~/.claude-memory/config.json` and defaults to Ollama `nomic-embed-text`; the CLI auto-detects. Without an embedder, recall is BM25-only
+- **Storage**: SQLite with BLOB for vectors, FTS5 for BM25; one database per project under `~/.claude-memory/<project-id>/memory.db`; schema version 13
+- **Search**: Hybrid RRF fusion (k=60): vector 35% + BM25 35% + links 30% when linked memories exist, else vector + BM25 50/50, with a volatility-scaled staleness penalty
+- **Memory Types**: `fact`, `pattern`, `decision`, `error`, `preference` (plus internal `goal` and `checkpoint`); sessions keep working memory and core memory
+- **Tech Stack**: TypeScript (MCP SDK compatibility), Node 22+
 
 ## Research Sources
 - GitHub Copilot Memory: 7% PR merge rate increase
@@ -41,39 +45,54 @@ A hybrid Claude Code plugin providing persistent intelligent memory through the 
 - Add unnecessary abstractions
 - Over-engineer embedding strategies
 - Create complex caching without benchmarks
-- Exceed 6 MCP tools (keep token overhead low)
+- Add MCP tools without a clear need: there are already 19, and every tool definition costs tokens in each session
 
 ### DO
 - Follow MCP SDK conventions exactly
 - Use SQLite for all persistence (simple, portable)
-- Implement hybrid search from day one
+- Keep hybrid search (vector + BM25) working, including the keyword-only path
 - Test with real Claude Code sessions
 - Keep skill under 2000 tokens when fully loaded
 - Use hooks for deterministic automation
 
+## Validation
+
+```bash
+npm ci
+npm run build       # tsc -p mcp/memory-server/tsconfig.json
+npm run typecheck
+npm test            # vitest: 417 tests in 29 files
+npm run lint        # eslint; currently reports existing errors (187 as of 2026-10-08)
+```
+
+Benchmarks are separate: `npm run bench` (and `bench:*` variants).
+
 ## Architecture Overview
 ```
-claude-memory/
-├── .claude-plugin/
-│   ├── manifest.json     # Plugin metadata
-│   └── marketplace.json  # Distribution info
+bpm-memory-mcp/
 ├── skills/
 │   └── memory/
-│       ├── SKILL.md      # Memory skill (teaches Claude)
+│       ├── SKILL.md          # Memory skill (teaches Claude)
 │       └── scripts/
-│           ├── compact.sh    # Context summarization
-│           └── validate.sh   # Memory validation
+│           └── compact.sh    # Context summarization
 ├── mcp/
 │   └── memory-server/
 │       └── src/
-│           ├── index.ts      # MCP server entry
-│           ├── embeddings/   # Ollama integration
-│           ├── search/       # Hybrid search (Vector + BM25)
-│           ├── storage/      # SQLite + FTS5
+│           ├── index.ts      # MCP server entry (all 19 tools)
+│           ├── cli.ts        # memory-cli
+│           ├── embeddings/   # Ollama + LM Studio providers, config, cache
+│           ├── search/       # Hybrid search (Vector + BM25 + links, RRF)
+│           ├── storage/      # SQLite + FTS5, schema and migrations
 │           ├── graph/        # Knowledge graph
-│           └── session/      # Session management
-├── hooks/
-│   └── settings.json     # Hook configurations
-├── tests/
+│           ├── linking/      # Memory links
+│           ├── consolidation/
+│           ├── extraction/   # Auto-extraction
+│           ├── fleet/        # Agent/team visibility scopes
+│           ├── quarantine/   # Web-derived fact quarantine
+│           ├── staleness/    # Volatility-scaled staleness
+│           ├── goals/, checkpoint/, backup/, security/,
+│           └── validation/, language/, utils/
+├── hooks/                    # Hook scripts (*.sh)
+├── tests/                    # unit/, integration/, e2e/, benchmarks/
 └── docs/
 ```

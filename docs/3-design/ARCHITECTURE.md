@@ -367,10 +367,6 @@ sequenceDiagram
 
 ```
 claude-memory/
-├── .claude-plugin/
-│   ├── manifest.json           # Plugin metadata (PL-001)
-│   └── marketplace.json        # Distribution info (PL-003)
-│
 ├── skills/
 │   └── memory/
 │       ├── SKILL.md            # Memory patterns (~2000 tokens)
@@ -433,8 +429,7 @@ claude-memory/
 │               ├── session_restore.ts
 │               └── graph_query.ts
 │
-├── hooks/
-│   └── settings.json           # Hook configurations
+├── hooks/                      # Hook scripts (*.sh)
 │
 ├── tests/
 │   ├── unit/

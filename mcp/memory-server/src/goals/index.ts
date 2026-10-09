@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { DatabaseConnection } from '../storage/database.js';
 import type { GoalState, GoalCreateInput, GoalStatus, Memory } from '../types.js';
 import { MemoryType } from '../types.js';
@@ -254,7 +254,6 @@ export class GoalRepository {
    * Hash content for deduplication
    */
   private hashContent(content: string): string {
-    const { createHash } = require('crypto');
     return createHash('sha256').update(content).digest('hex');
   }
 

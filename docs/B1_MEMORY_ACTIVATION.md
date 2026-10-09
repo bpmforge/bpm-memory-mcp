@@ -3,7 +3,7 @@
 Tracker for activating the dormant / broken self-maintenance machinery in this
 server, so memory improves itself autonomously (the "sleep-time consolidation +
 bi-temporal" lever from the *bridging-the-frontier-gap* research book in
-`bpm-opencode-experts`). **Thesis: activate what exists, don't rebuild.**
+`attest`, formerly `bpm-opencode-experts`). **Thesis: activate what exists, don't rebuild.**
 
 ## Source-grounded state (verified against code, not assumed)
 

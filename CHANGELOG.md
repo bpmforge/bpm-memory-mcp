@@ -4,6 +4,40 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- The MCP server advertised version `1.0.0`; it now reports `1.2.0`.
+- `tests/benchmarks/real/*` resolved the repo from a hardcoded
+  `/Users/...` path; they now resolve it relative to the test file.
+- `npm run lint` failed to start: `eslint.config.js` imports
+  `typescript-eslint` and `@eslint/js`, which are now declared
+  devDependencies. Lint runs and reports existing errors (187).
+- `install.sh` printed an outdated MCP settings snippet; it now prints
+  `claude mcp add memory node <path>` and the OpenCode entry.
+- Removed an unreachable branch in hybrid search fusion (no behaviour change).
+
+### Removed
+
+- `quality-test.sh` / `quality-test.py`: a local LM Studio chat-model quality
+  script unrelated to this server, with machine-specific paths and LAN hosts.
+- Dead `$schema` URLs in `.claude-plugin/*.json` and `hooks/settings.json`
+  (they returned 404). Repository links there now point at
+  `bpmforge/bpm-memory-mcp`.
+- `.claude-plugin/manifest.json`, `.claude-plugin/marketplace.json` and
+  `hooks/settings.json`: none matched Claude Code's plugin or hooks format
+  (the hooks file listed `SessionStart` as a `PreToolUse` matcher) and nothing,
+  including `install.sh`, read them. The `hooks/*.sh` scripts remain.
+
+### Docs
+
+- README: lists all 19 tools; documents the real embedding configuration
+  (`~/.claude-memory/config.json`, Ollama default), environment variables,
+  schema v13, the CLI, and the renamed `attest-claude` / `attest` installers.
+- CLAUDE.md: correct project name, tool count (19), validation commands,
+  schema and test facts, and directory layout.
+
 ## [1.2.0] — 2026-07-14
 
 ### Fixed
@@ -87,9 +121,25 @@ built. See `docs/B1_MEMORY_ACTIVATION.md` for the source-grounded map.
   (with the deliberate boundary that it links but does not auto-supersede).
   Suite: 300 passing.
 
-## [1.0.0] — earlier
+## [1.0.0] — 2026-05-01
 
 Initial release: hybrid memory (vector + BM25 with RRF fusion), knowledge graph
 with bi-temporal entities/relations, Zettelkasten memory links, MemGPT-style
 core memory, fact store with citations, sessions/goals/checkpoints, and local
 embeddings (Ollama / LM Studio).
+
+Built up from 2026-01-16 to 2026-05-01. The main steps in git history:
+
+- V2: session management, core memory blocks, model config, hooks and
+  plugin manifest, and V2 search filters.
+- V3–V5: goal anchoring, task checkpoints, automatic memory linking, graph
+  queries and proactive context assembly (`memory_context_assemble`).
+- V9–V11: auto-extraction (`memory_auto_extract`), consolidation, and
+  knowledge-graph population; security hardening (credential and path
+  filtering).
+- V12: token-budgeted context assembly, the standalone `memory-cli`, and
+  `memory_reembed`.
+- Schema v9: fact store columns and the `fact_store` / `fact_query` tools.
+- Semantic near-duplicate detection at store time (cosine > 0.88 soft-deprecates
+  older facts/preferences/patterns), a freshness burst for memories under
+  5 minutes old, and faster fact decay. 275 tests passing.

@@ -93,12 +93,11 @@ Startup sequence:
 claude-memory/
 ├── package.json           # npm configuration
 ├── tsconfig.json          # TypeScript configuration
-├── .claude-plugin/        # Plugin manifest
 ├── skills/                # Skill layer (SKILL.md)
 ├── mcp/                   # MCP server source
 │   └── memory-server/
 │       └── src/
-├── hooks/                 # Hook configurations
+├── hooks/                 # Hook scripts
 └── tests/                 # Test suites
 ```
 
