@@ -129,4 +129,4 @@ See `agents/shared/MEMORY_PRIMER.md` in [attest-claude](https://github.com/bpmfo
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
